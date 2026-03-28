@@ -1,0 +1,40 @@
+-- 1) Ver todas as permissoes cadastradas
+SELECT id, code, description
+FROM erp_permissions
+ORDER BY code;
+
+-- 2) Ver permissoes por role
+SELECT rp.role, p.code
+FROM erp_role_permissions rp
+JOIN erp_permissions p ON p.id = rp.permission_id
+ORDER BY rp.role, p.code;
+
+-- 3) Ver overrides por usuario
+SELECT u.id AS user_id, u.login, p.code, up.is_allowed
+FROM erp_user_permissions up
+JOIN erp_users u ON u.id = up.user_id
+JOIN erp_permissions p ON p.id = up.permission_id
+ORDER BY u.login, p.code;
+
+-- 4) Conceder permissao para um usuario (override allow)
+INSERT INTO erp_user_permissions (user_id, permission_id, is_allowed)
+SELECT :user_id, p.id, TRUE
+FROM erp_permissions p
+WHERE p.code = :permission_code
+ON CONFLICT (user_id, permission_id)
+DO UPDATE SET is_allowed = EXCLUDED.is_allowed, updated_at = NOW();
+
+-- 5) Negar permissao para um usuario (override deny)
+INSERT INTO erp_user_permissions (user_id, permission_id, is_allowed)
+SELECT :user_id, p.id, FALSE
+FROM erp_permissions p
+WHERE p.code = :permission_code
+ON CONFLICT (user_id, permission_id)
+DO UPDATE SET is_allowed = EXCLUDED.is_allowed, updated_at = NOW();
+
+-- 6) Remover override (volta a regra da role)
+DELETE FROM erp_user_permissions up
+USING erp_permissions p
+WHERE up.permission_id = p.id
+  AND up.user_id = :user_id
+  AND p.code = :permission_code;

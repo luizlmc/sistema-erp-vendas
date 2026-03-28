@@ -1,0 +1,543 @@
+{
+  "info": {
+    "_postman_id": "9f9dc2f4-7c4c-4f57-b5cc-erp-vendas-collection",
+    "name": "Sistema ERP Vendas",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:9000" },
+    { "key": "access_token", "value": "" },
+    { "key": "refresh_token", "value": "" },
+    { "key": "client_id", "value": "" },
+    { "key": "category_id", "value": "" },
+    { "key": "product_id", "value": "" },
+    { "key": "order_id", "value": "" },
+    { "key": "receivable_id", "value": "" },
+    { "key": "payment_id", "value": "" },
+    { "key": "fiscal_id", "value": "" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{access_token}}", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"admin\",\n  \"password\": \"admin123\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/auth/login"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('access_token', data.access_token || '');",
+                  "pm.collectionVariables.set('refresh_token', data.refresh_token || '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/auth/refresh"
+          }
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/auth/me"
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/auth/logout"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Categories",
+      "item": [
+        {
+          "name": "Create Category",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"CAT-POST\",\n  \"name\": \"Categoria Postman\",\n  \"is_active\": true\n}"
+            },
+            "url": "{{base_url}}/api/v1/categories"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('category_id', data.id || '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Categories",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/categories?page=1&page_size=10&sort_by=name&sort_dir=asc&q=cat"
+          }
+        },
+        {
+          "name": "Get Category",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/categories/{{category_id}}"
+          }
+        },
+        {
+          "name": "Update Category",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Categoria Postman Alterada\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/categories/{{category_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Products",
+      "item": [
+        {
+          "name": "Create Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sku\": \"SKU-POST-001\",\n  \"name\": \"Produto Postman\",\n  \"description\": \"Produto de teste\",\n  \"category_id\": {{category_id}},\n  \"unit_price\": 99.9,\n  \"stock_qty\": 20,\n  \"is_active\": true\n}"
+            },
+            "url": "{{base_url}}/api/v1/products"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('product_id', data.id || '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Products",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/products?page=1&page_size=10&sort_by=name&sort_dir=asc&q=prod&is_active=true"
+          }
+        },
+        {
+          "name": "Get Product",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/products/{{product_id}}"
+          }
+        },
+        {
+          "name": "Update Product",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"unit_price\": 120.5,\n  \"stock_qty\": 15\n}"
+            },
+            "url": "{{base_url}}/api/v1/products/{{product_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Clients",
+      "item": [
+        {
+          "name": "Create Client",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"document_type\": \"CPF\",\n  \"document\": \"12312312399\",\n  \"name\": \"Cliente Postman\",\n  \"email\": \"cliente@teste.com\",\n  \"phone\": \"11999999999\",\n  \"is_active\": true\n}"
+            },
+            "url": "{{base_url}}/api/v1/clients"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('client_id', data.id || '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Clients",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/clients?page=1&page_size=10&sort_by=name&sort_dir=asc&q=cliente&is_active=true"
+          }
+        },
+        {
+          "name": "Get Client",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/clients/{{client_id}}"
+          }
+        },
+        {
+          "name": "Update Client",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Cliente Postman Alterado\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/clients/{{client_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/users?page=1&page_size=10&sort_by=login&sort_dir=asc&role=ADMIN"
+          }
+        },
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"user.postman\",\n  \"full_name\": \"Usuario Postman\",\n  \"password\": \"123456\",\n  \"role\": \"USER\",\n  \"is_active\": true\n}"
+            },
+            "url": "{{base_url}}/api/v1/users"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "item": [
+        {
+          "name": "Create Order",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_id\": {{client_id}},\n  \"notes\": \"Pedido via Postman\",\n  \"items\": [\n    {\n      \"product_id\": {{product_id}},\n      \"quantity\": 1\n    }\n  ]\n}"
+            },
+            "url": "{{base_url}}/api/v1/orders"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('order_id', data.id || '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Orders",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/orders?page=1&page_size=10&sort_by=created_at&sort_dir=desc&status=OPEN"
+          }
+        },
+        {
+          "name": "Get Order",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/orders/{{order_id}}"
+          }
+        },
+        {
+          "name": "Confirm Order",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": "{{base_url}}/api/v1/orders/{{order_id}}/confirm"
+          }
+        },
+        {
+          "name": "Invoice Order",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"invoice_number\": \"INV-POST-001\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/orders/{{order_id}}/invoice"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Receivables",
+      "item": [
+        {
+          "name": "List Receivables",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/receivables?page=1&page_size=10&sort_by=due_date&sort_dir=asc&order_id={{order_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.items && data.items.length > 0) {",
+                  "  pm.collectionVariables.set('receivable_id', data.items[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Receivable",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/receivables/{{receivable_id}}"
+          }
+        },
+        {
+          "name": "Register Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 50,\n  \"payment_method\": \"PIX\",\n  \"notes\": \"Pagamento parcial\",\n  \"payment_date\": \"2026-03-22T00:00:00Z\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/receivables/{{receivable_id}}/payments"
+          }
+        },
+        {
+          "name": "Get Receivable After Payment",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/receivables/{{receivable_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.payments && data.payments.length > 0) {",
+                  "  pm.collectionVariables.set('payment_id', data.payments[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reverse Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Estorno de teste\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/receivables/{{receivable_id}}/payments/{{payment_id}}/reverse"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Fiscal",
+      "item": [
+        {
+          "name": "Fiscal Provider",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/fiscal/provider"
+          }
+        },
+        {
+          "name": "Emit Fiscal",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"series\": \"1\",\n  \"number\": \"123\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/orders/{{order_id}}/fiscal/emit"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('fiscal_id', data.id || '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Fiscal Documents",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/fiscal/documents?page=1&page_size=10&sort_by=issued_at&sort_dir=desc&order_id={{order_id}}"
+          }
+        },
+        {
+          "name": "Get Fiscal Document",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/fiscal/documents/{{fiscal_id}}"
+          }
+        },
+        {
+          "name": "Get Fiscal By Order",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/orders/{{order_id}}/fiscal"
+          }
+        },
+        {
+          "name": "Cancel Fiscal",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Cancelamento de teste\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/fiscal/documents/{{fiscal_id}}/cancel"
+          }
+        }
+      ]
+    }
+  ]
+}
