@@ -228,8 +228,10 @@ function canOrderAction(statusRaw: string, action: "confirm" | "invoice" | "emit
   const isPartial = status.includes("PARTIAL");
 
   if (action === "confirm") return !isCanceled && !isInvoiced && (isOpen || isAwaiting);
-  if (action === "invoice") return !isCanceled && !isInvoiced && (isApproved || isAwaiting || isOpen || isPartial);
-  if (action === "emit") return !isCanceled && !hasFiscal;
+  // Regra comercial: faturamento deve ocorrer apenas quando o pedido estiver aprovado ou parcialmente atendido.
+  if (action === "invoice") return !isCanceled && !isInvoiced && (isApproved || isPartial);
+  // Emissao fiscal apenas apos faturamento (total ou parcial) e sem documento fiscal ja vinculado.
+  if (action === "emit") return !isCanceled && !hasFiscal && (isInvoiced || isPartial);
   return !isCanceled && !isInvoiced;
 }
 
@@ -905,7 +907,13 @@ export default function SalesPage() {
           ? item.note
           : `${item.old_status ? `${orderStatusLabel(item.old_status)} -> ` : ""}${orderStatusLabel(item.new_status)}${item.changed_by_name ? ` por ${item.changed_by_name}` : ""}`,
       }));
-    if (fromHistory.length > 0) return fromHistory;
+    if (fromHistory.length > 0) {
+      return [...fromHistory].sort((a, b) => {
+        const da = parseDateValue(a.value);
+        const db = parseDateValue(b.value);
+        return (db?.getTime() || 0) - (da?.getTime() || 0);
+      });
+    }
 
     const fiscal = fiscalByOrder[detail.id];
     const fromDetail = detail as unknown as {
@@ -941,7 +949,13 @@ export default function SalesPage() {
         note: "Pedido cancelado",
       },
     ];
-    return events.filter((event) => parseDateValue(event.value));
+    return events
+      .filter((event) => parseDateValue(event.value))
+      .sort((a, b) => {
+        const da = parseDateValue(a.value);
+        const db = parseDateValue(b.value);
+        return (db?.getTime() || 0) - (da?.getTime() || 0);
+      });
   }, [detail, currentOrderListItem, fiscalByOrder, orderHistory]);
 
   const quoteTimeline = useMemo(() => {
@@ -955,11 +969,23 @@ export default function SalesPage() {
         ? item.note
         : `${item.old_status ? `${quoteStatusLabel(item.old_status)} -> ` : ""}${quoteStatusLabel(item.new_status)}${item.changed_by_name ? ` por ${item.changed_by_name}` : ""}`,
       }));
-    if (fromHistory.length > 0) return fromHistory;
+    if (fromHistory.length > 0) {
+      return [...fromHistory].sort((a, b) => {
+        const da = parseDateValue(a.value);
+        const db = parseDateValue(b.value);
+        return (db?.getTime() || 0) - (da?.getTime() || 0);
+      });
+    }
     const createdOnly = [
       { label: "Orcamento criado", value: quoteDetail.created_at, note: "Documento em construcao" },
     ];
-    return createdOnly.filter((event) => parseDateValue(event.value));
+    return createdOnly
+      .filter((event) => parseDateValue(event.value))
+      .sort((a, b) => {
+        const da = parseDateValue(a.value);
+        const db = parseDateValue(b.value);
+        return (db?.getTime() || 0) - (da?.getTime() || 0);
+      });
   }, [quoteDetail, quoteHistory]);
 
   const currentAttachments = activeDetailKey ? detailAttachments[activeDetailKey] ?? [] : [];
