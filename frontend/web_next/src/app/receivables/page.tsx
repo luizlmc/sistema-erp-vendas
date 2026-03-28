@@ -48,16 +48,17 @@ function statusLabel(status: string) {
 }
 
 function statusClass(status: string) {
-  if (status === "PAID") return "bg-[#14532d] text-[#86efac]";
-  if (status === "CANCELED") return "bg-[#7f1d1d] text-[#fca5a5]";
-  if (status === "PARTIAL") return "bg-[#1e3a5f] text-[#93c5fd]";
-  if (status === "OVERDUE") return "bg-[#7c2d12] text-[#fdba74]";
-  return "bg-[#3f1f00] text-[#fbbf24]";
+  if (status === "PAID") return "erp-tag-success";
+  if (status === "CANCELED") return "erp-tag-danger";
+  if (status === "PARTIAL") return "erp-tag-info";
+  if (status === "OVERDUE") return "erp-tag-warn";
+  return "erp-tag-warn";
 }
 
 export default function ReceivablesPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [kpiReady, setKpiReady] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -65,7 +66,7 @@ export default function ReceivablesPage() {
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [page, setPage] = useState(1);
-  const pageSize = 12;
+  const pageSize = 10;
 
   const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
@@ -143,6 +144,13 @@ export default function ReceivablesPage() {
       canceled = true;
     };
   }, [router, page, query, status, sortBy, clientIdFilter, orderIdFilter, refreshKey]);
+
+  useEffect(() => {
+    if (loading) return;
+    setKpiReady(false);
+    const timer = window.setTimeout(() => setKpiReady(true), 80);
+    return () => window.clearTimeout(timer);
+  }, [loading, items.length, paymentMethodFilter]);
 
   const visibleItems = useMemo(() => {
     if (paymentMethodFilter === "all") return items;
@@ -233,13 +241,13 @@ export default function ReceivablesPage() {
         </section>
       ) : (
         <div className="space-y-3">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-[#2a3045] px-3 pb-2">
+          <div className="erp-page-header">
             <div className="flex items-center gap-3">
-              <h1 className="text-[24px] font-semibold leading-none text-[#e2e8f0]">Contas a Receber</h1>
-              <span className="text-[12px] text-[#64748b]">Titulos originados de faturamentos e vendas a prazo</span>
+              <h1 className="erp-page-title">Contas a Receber</h1>
+              <span className="erp-page-subtitle">Titulos originados de faturamentos e vendas a prazo</span>
             </div>
             <button
-              className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-4 text-[13px] font-medium text-[#e2e8f0] transition hover:border-[#3a4260]"
+              className="erp-btn erp-btn-secondary"
               onClick={() => setRefreshKey((v) => v + 1)}
               type="button"
             >
@@ -255,23 +263,23 @@ export default function ReceivablesPage() {
               { t: "RECEBIDO", v: brl(kpis.receivedAmount), s: "Valores baixados", c: "bg-[#22c55e]", d: "180ms" },
             ].map((kpi) => (
               <article
-                className="group relative overflow-hidden rounded-md border border-[#2a3045] bg-[#161a24] px-4 py-3"
+                className={`erp-kpi-card flex min-h-[118px] flex-col items-start justify-between text-left transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[#3a4260] hover:shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${kpiReady ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"}`}
                 key={kpi.t}
-                style={{ animation: `fadeSlideIn 420ms ease ${kpi.d} both` }}
+                style={{ transitionDelay: kpi.d }}
               >
-                <span className={`absolute left-0 top-0 h-[2px] w-full ${kpi.c}`} />
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-[#64748b]">{kpi.t}</p>
-                <p className="mt-2 font-mono text-[40px] font-semibold leading-none text-[#e2e8f0]">{kpi.v}</p>
-                <p className="mt-2 text-[12px] text-[#64748b]">{kpi.s}</p>
+                <span className={`erp-kpi-line ${kpi.c}`} />
+                <p className="font-mono text-xs font-semibold uppercase tracking-wider text-[#475569]">{kpi.t}</p>
+                <h3 className="mt-1.5 font-mono text-3xl font-bold leading-none text-[#e2e8f0]">{kpi.v}</h3>
+                <p className="text-[11px] text-[#64748b]">{kpi.s}</p>
               </article>
             ))}
           </section>
 
           <section className="overflow-hidden rounded-md border border-[#2a3045] bg-[#161a24]">
             <div className="flex flex-wrap items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] px-4 py-2.5">
-              <div className="relative min-w-[240px] flex-1">
+              <div className="erp-list-search-wrap min-w-[240px]">
                 <input
-                  className="h-9 w-full rounded border border-[#2a3045] bg-[#161a24] px-3 pr-10 text-[13px] text-[#e2e8f0] placeholder:text-[#64748b]"
+                  className="erp-list-search-input"
                   onChange={(event) => setQueryInput(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") applySearch();
@@ -279,21 +287,13 @@ export default function ReceivablesPage() {
                   placeholder="Buscar titulo, pedido ou cliente..."
                   value={queryInput}
                 />
-                <button
-                  className="absolute inset-y-0 right-1.5 my-auto inline-flex h-7 w-7 items-center justify-center rounded text-[#64748b] transition hover:text-[#e2e8f0]"
-                  onClick={applySearch}
-                  type="button"
-                >
+                <button className="erp-list-search-btn" onClick={applySearch} type="button">
                   <span className="material-symbols-outlined !text-[18px]">search</span>
                 </button>
               </div>
 
               <button
-                className={`inline-flex h-9 items-center gap-1.5 rounded border px-3 text-[13px] transition ${
-                  showFilters
-                    ? "border-[#3b82f6] bg-[#1e3a5f] text-[#e2e8f0]"
-                    : "border-[#2a3045] bg-[#161a24] text-[#94a3b8] hover:border-[#3a4260] hover:text-[#e2e8f0]"
-                }`}
+                className={`erp-filter-btn ${showFilters ? "erp-filter-btn-on" : "erp-filter-btn-off"}`}
                 onClick={() => setShowFilters((s) => !s)}
                 type="button"
               >
@@ -301,9 +301,9 @@ export default function ReceivablesPage() {
                 Filtros
               </button>
 
-              <span className="ml-auto font-mono text-[11px] uppercase tracking-[0.16em] text-[#64748b]">Ordenar por:</span>
+              <span className="erp-sort-label">Ordenar por:</span>
               <select
-                className="h-9 rounded border border-[#2a3045] bg-[#161a24] px-3 text-[13px] text-[#e2e8f0]"
+                className="erp-list-sort-select"
                 onChange={(event) => {
                   setPage(1);
                   setSortBy(event.target.value as SortBy);
@@ -384,7 +384,7 @@ export default function ReceivablesPage() {
 
                 <div className="flex items-end">
                   <button
-                    className="h-8 w-full rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[12px] text-[#94a3b8] transition hover:border-[#3a4260] hover:text-[#e2e8f0]"
+                    className="erp-list-action-btn h-8 w-full px-3 text-[12px]"
                     onClick={() => {
                       setStatus("all");
                       setPaymentMethodFilter("all");
@@ -418,8 +418,9 @@ export default function ReceivablesPage() {
             ) : (
               visibleItems.map((item) => (
                 <div
-                  className="grid grid-cols-[0.8fr_1fr_2fr_1fr_1fr_1fr_1fr_1fr] items-center border-b border-[#2a3045] px-4 py-3 text-left transition hover:bg-[#1e2332]"
+                  className="grid cursor-pointer grid-cols-[0.8fr_1fr_2fr_1fr_1fr_1fr_1fr_1fr] items-center border-b border-[#2a3045] px-4 py-3 text-left transition hover:bg-[#1e2332]"
                   key={item.id}
+                  onClick={() => openDetail(item.id)}
                 >
                   <span className="font-mono text-[12px] text-[#3b82f6]">#{item.id}</span>
                   <span className="font-mono text-[12px] text-[#94a3b8]">PED-{String(item.order_id).padStart(6, "0")}</span>
@@ -430,14 +431,17 @@ export default function ReceivablesPage() {
                   <span className="font-mono text-[12px] text-[#94a3b8]">{dmy(item.due_date)}</span>
                   <span className="font-mono text-[12px] text-[#e2e8f0]">{brl(item.balance_amount)}</span>
                   <span>
-                    <span className={`inline-flex h-5 items-center rounded-[2px] px-2 font-mono text-[10px] ${statusClass(item.status)}`}>
+                    <span className={`erp-tag ${statusClass(item.status)}`}>
                       {statusLabel(item.status)}
                     </span>
                   </span>
                   <div className="flex justify-end">
                     <button
-                      className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#e2e8f0] hover:border-[#3a4260] hover:bg-[#253049]"
-                      onClick={() => openDetail(item.id)}
+                      className="erp-list-action-btn"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void openDetail(item.id);
+                      }}
                       type="button"
                     >
                       Abrir
@@ -447,14 +451,14 @@ export default function ReceivablesPage() {
               ))
             )}
 
-            <div className="flex items-center border-t border-[#2a3045] px-4 py-2 font-mono text-[12px] text-[#64748b]">
+            <div className="erp-pagination-footer">
               <span>
                 Mostrando {(page - 1) * pageSize + (visibleItems.length > 0 ? 1 : 0)}-
                 {(page - 1) * pageSize + visibleItems.length} de {totalItems}
               </span>
-              <div className="ml-auto flex items-center gap-2">
+              <div className="erp-pagination-nav">
                 <button
-                  className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
+                  className="erp-list-action-btn h-7 px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
                   disabled={page <= 1}
                   onClick={() => setPage((p) => Math.max(p - 1, 1))}
                   type="button"
@@ -465,7 +469,7 @@ export default function ReceivablesPage() {
                   Pagina {page} de {totalPages}
                 </span>
                 <button
-                  className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
+                  className="erp-list-action-btn h-7 px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
                   disabled={page >= totalPages}
                   onClick={() => setPage((p) => Math.min(p + 1, totalPages))}
                   type="button"
@@ -619,4 +623,3 @@ export default function ReceivablesPage() {
     </ErpShell>
   );
 }
-

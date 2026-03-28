@@ -145,6 +145,7 @@ export default function CompaniesPage() {
   const [page, setPage] = useState(1);
   const [reload, setReload] = useState(0);
   const [error, setError] = useState("");
+  const [kpiReady, setKpiReady] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [mode, setMode] = useState<"create" | "edit">("create");
@@ -236,6 +237,13 @@ export default function CompaniesPage() {
       cancel = true;
     };
   }, [router, query, reload]);
+
+  useEffect(() => {
+    if (loading) return;
+    setKpiReady(false);
+    const timer = window.setTimeout(() => setKpiReady(true), 80);
+    return () => window.clearTimeout(timer);
+  }, [loading, items.length]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase();
@@ -391,16 +399,17 @@ export default function CompaniesPage() {
         </section>
       ) : (
         <div className="space-y-3">
-        <header className="border-b border-[#2a3045] pb-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div>
-              <h1 className="text-[24px] font-semibold leading-none text-[#e2e8f0]">Empresas</h1>
-              <p className="mt-1 text-[12px] text-[#64748b]">Cadastro, manutencao e situacao fiscal das empresas emissoras</p>
-            </div>
-            <div className="ml-auto flex items-center gap-2">
-              <button className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-4 text-[13px] font-medium text-[#e2e8f0] transition hover:border-[#3a4260]" onClick={() => setReload((current) => current + 1)} type="button">Atualizar</button>
-              <button className="h-10 rounded border border-[#1d4ed8] bg-[#2563eb] px-4 text-[13px] font-semibold text-white transition hover:brightness-110 active:brightness-95" onClick={openCreate} type="button">Nova empresa</button>
-            </div>
+        <header className="erp-page-header">
+          <div>
+            <h1 className="erp-page-title">Empresas</h1>
+            <p className="erp-page-subtitle mt-1">Cadastro, manutencao e situacao fiscal das empresas emissoras</p>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button className="erp-btn erp-btn-secondary" onClick={() => setReload((current) => current + 1)} type="button">Atualizar</button>
+            <button className="erp-btn erp-btn-primary" onClick={openCreate} type="button">
+              <span className="erp-icon-plus">add</span>
+              Nova empresa
+            </button>
           </div>
         </header>
         <section className="grid grid-cols-1 gap-2 md:grid-cols-4">
@@ -411,35 +420,37 @@ export default function CompaniesPage() {
             { t: "ICMS ESTIMADO", v: brl(kpis.est), s: "Media consolidada", c: "bg-[#f59e0b]", d: "180ms" },
           ].map((kpi) => (
             <article
-              className="group relative overflow-hidden rounded-md border border-[#2a3045] bg-[#161a24] px-4 py-3"
+              className={`erp-kpi-card flex min-h-[118px] flex-col items-start justify-between text-left transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[#3a4260] hover:shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${kpiReady ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"}`}
               key={kpi.t}
-              style={{ animation: `fadeSlideIn 420ms ease ${kpi.d} both` }}
+              style={{ transitionDelay: kpi.d }}
             >
-              <span className={`absolute left-0 top-0 h-[2px] w-full ${kpi.c}`} />
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-[#64748b]">{kpi.t}</p>
-              <p className="mt-2 font-mono text-[40px] font-semibold leading-none text-[#e2e8f0]">{kpi.v}</p>
-              <p className="mt-2 text-[12px] text-[#64748b]">{kpi.s}</p>
+              <span className={`erp-kpi-line ${kpi.c}`} />
+              <p className="font-mono text-xs font-semibold uppercase tracking-wider text-[#475569]">{kpi.t}</p>
+              <h3 className="mt-1.5 font-mono text-3xl font-bold leading-none text-[#e2e8f0]">{kpi.v}</h3>
+              <p className="text-[11px] text-[#64748b]">{kpi.s}</p>
             </article>
           ))}
         </section>
 
         <section className="rounded-md border border-[#2a3045] bg-[#161a24]">
           <div className="flex flex-wrap items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] p-3">
-            <div className="relative min-w-[260px] flex-1">
+            <div className="erp-list-search-wrap min-w-[260px]">
               <input
-                className="h-10 w-full rounded border border-[#2a3045] bg-[#161a24] px-10 text-[14px] text-[#e2e8f0] placeholder:text-[#64748b]"
+                className="erp-list-search-input pl-10"
                 onChange={(event) => setQueryInput(event.target.value)}
                 onKeyDown={(event) => event.key === "Enter" && setQuery(queryInput.trim())}
                 placeholder="Buscar empresa, CNPJ, codigo..."
                 value={queryInput}
               />
               <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-[#64748b]">search</span>
-              <button className="absolute right-1.5 top-1.5 inline-flex h-7 items-center rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[12px] text-[#e2e8f0] hover:border-[#3a4260]" onClick={() => setQuery(queryInput.trim())} type="button">Buscar</button>
+              <button className="erp-list-search-btn" onClick={() => setQuery(queryInput.trim())} type="button">
+                <span className="material-symbols-outlined !text-[18px]">search</span>
+              </button>
             </div>
-            <button className={`inline-flex h-10 items-center gap-2 rounded border px-3 text-[14px] ${showFilters ? "border-[#3b82f6] bg-[#243a63] text-[#e2e8f0]" : "border-[#2a3045] bg-[#161a24] text-[#94a3b8] hover:border-[#3a4260]"}`} onClick={() => setShowFilters((current) => !current)} type="button"><span className="material-symbols-outlined !text-[16px]">tune</span>Filtros</button>
-            <label className="ml-auto inline-flex h-10 items-center gap-2 text-[12px] text-[#64748b]">
+            <button className={`erp-filter-btn ${showFilters ? "erp-filter-btn-on" : "erp-filter-btn-off"}`} onClick={() => setShowFilters((current) => !current)} type="button"><span className="material-symbols-outlined !text-[16px]">tune</span>Filtros</button>
+            <label className="erp-sort-label inline-flex h-9 items-center gap-2">
               ORDENAR POR:
-              <select className="h-10 rounded border border-[#2a3045] bg-[#161a24] px-3 text-[14px] text-[#e2e8f0]" onChange={(event) => setSortBy(event.target.value as SortBy)} value={sortBy}>
+              <select className="erp-list-sort-select" onChange={(event) => setSortBy(event.target.value as SortBy)} value={sortBy}>
                 <option value="recent">Mais recente</option>
                 <option value="name_asc">Nome (A-Z)</option>
                 <option value="name_desc">Nome (Z-A)</option>
@@ -467,7 +478,7 @@ export default function CompaniesPage() {
                 </select>
               </label>
               <div className="flex items-end">
-                <button className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[13px] text-[#e2e8f0] hover:border-[#3a4260]" onClick={() => {
+                <button className="erp-list-action-btn h-10 px-3 text-[13px]" onClick={() => {
                   setStatusFilter("all");
                   setRegimeFilter("all");
                   setSortBy("recent");
@@ -501,12 +512,12 @@ export default function CompaniesPage() {
                       <td className="px-4 py-3"><div className="font-semibold">{company.legal_name}</div><div className="text-xs text-[#64748b]">{company.trade_name || "Sem fantasia"}</div></td>
                       <td className="px-4 py-3 font-mono text-[#94a3b8]">{company.cnpj}</td>
                       <td className="px-4 py-3">{company.tax_regime}</td>
-                      <td className="px-4 py-3"><span className={`inline-flex rounded px-2 py-1 font-mono text-[11px] ${company.is_active ? "bg-[#14532d] text-[#86efac]" : "bg-[#7f1d1d] text-[#fca5a5]"}`}>{company.is_active ? "Ativa" : "Inativa"}</span></td>
+                      <td className="px-4 py-3"><span className={`erp-tag ${company.is_active ? "erp-tag-success" : "erp-tag-danger"}`}>{company.is_active ? "Ativa" : "Inativa"}</span></td>
                       <td className="px-4 py-3 font-mono text-[12px] text-[#64748b]">{dmy(company.created_at)}</td>
                       <td className="px-4 py-3"><div className="flex justify-end gap-2">
-                        <button className="rounded border border-[#2a3045] bg-[#1e2332] px-2.5 py-1.5 text-[12px] text-[#e2e8f0] hover:border-[#3a4260]" onClick={(event) => { event.stopPropagation(); openEdit(company); }} type="button">Abrir</button>
-                        <button className="rounded border border-[#2a3045] bg-[#1e2332] px-2.5 py-1.5 text-[12px] text-[#e2e8f0] hover:border-[#3a4260]" onClick={(event) => { event.stopPropagation(); openEdit(company); }} type="button">Editar</button>
-                        <button className={`rounded border px-2.5 py-1.5 text-[12px] ${company.is_active ? "border-[#991b1b] bg-[#7f1d1d] text-[#fca5a5]" : "border-[#166534] bg-[#14532d] text-[#86efac]"}`} disabled={togglingId === company.id} onClick={(event) => { event.stopPropagation(); void toggleActive(company); }} type="button">{togglingId === company.id ? "..." : company.is_active ? "Inativar" : "Reativar"}</button>
+                        <button className="erp-list-action-btn" onClick={(event) => { event.stopPropagation(); openEdit(company); }} type="button">Abrir</button>
+                        <button className="erp-list-action-btn" onClick={(event) => { event.stopPropagation(); openEdit(company); }} type="button">Editar</button>
+                        <button className={`erp-list-action-btn ${company.is_active ? "border-[#991b1b] bg-[#7f1d1d] text-[#fca5a5] hover:border-[#b91c1c] hover:bg-[#8f2222]" : "border-[#166534] bg-[#14532d] text-[#86efac] hover:border-[#15803d] hover:bg-[#166534]"}`} disabled={togglingId === company.id} onClick={(event) => { event.stopPropagation(); void toggleActive(company); }} type="button">{togglingId === company.id ? "..." : company.is_active ? "Inativar" : "Reativar"}</button>
                       </div></td>
                     </tr>
                   ))
@@ -515,12 +526,28 @@ export default function CompaniesPage() {
             </table>
           </div>
 
-          <div className="flex items-center justify-between border-t border-[#2a3045] px-4 py-2 font-mono text-[12px] text-[#64748b]">
-            <span>{filtered.length === 0 ? "Mostrando 0-0" : `Mostrando ${start + 1}-${end}`}</span>
-            <div className="flex items-center gap-2">
-              <button className="px-1 transition hover:text-[#e2e8f0] disabled:opacity-40 disabled:hover:text-[#64748b]" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} type="button">←</button>
-              <span>{currentPage} / {totalPages}</span>
-              <button className="px-1 transition hover:text-[#e2e8f0] disabled:opacity-40 disabled:hover:text-[#64748b]" disabled={currentPage >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))} type="button">→</button>
+          <div className="erp-pagination-footer">
+            <span>{filtered.length === 0 ? "Mostrando 0-0" : `Mostrando ${start + 1}-${end} de ${filtered.length}`}</span>
+            <div className="erp-pagination-nav">
+              <button
+                className="erp-list-action-btn h-7 px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
+                disabled={currentPage <= 1}
+                onClick={() => setPage((value) => Math.max(1, value - 1))}
+                type="button"
+              >
+                Anterior
+              </button>
+              <span className="text-[11px] text-[#94a3b8]">
+                Pagina {currentPage} de {totalPages}
+              </span>
+              <button
+                className="erp-list-action-btn h-7 px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
+                disabled={currentPage >= totalPages}
+                onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+                type="button"
+              >
+                Proxima
+              </button>
             </div>
           </div>
         </section>
@@ -598,3 +625,4 @@ export default function CompaniesPage() {
     </ErpShell>
   );
 }
+

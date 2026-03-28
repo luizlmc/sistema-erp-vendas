@@ -4,11 +4,9 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DashboardSummary,
-  FiscalDocument,
   OrderListItem,
   dashboardSummaryRequest,
   emitOrderFiscalRequest,
-  getOrderFiscalRequest,
   invoiceOrderRequest,
   listOrdersRequest,
 } from "@/lib/api";
@@ -85,10 +83,10 @@ type FiscalModelFilter = "all" | "nfe55" | "nfce65";
 export default function FiscalPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [orders, setOrders] = useState<OrderListItem[]>([]);
-  const [fiscalByOrder, setFiscalByOrder] = useState<Record<number, FiscalDocument | null>>({});
   const [kpiReady, setKpiReady] = useState(false);
   const [emitModalOpen, setEmitModalOpen] = useState(false);
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: "success" | "error" }>>([]);
@@ -120,32 +118,48 @@ export default function FiscalPage() {
   const [statusFilter, setStatusFilter] = useState<FiscalStatusFilter>("all");
   const [modelFilter, setModelFilter] = useState<FiscalModelFilter>("all");
   const [emissaoFilter, setEmissaoFilter] = useState("");
+  const [detailRow, setDetailRow] = useState<FiscalRow | null>(null);
 
-  async function loadOrdersAndFiscal(token: string) {
+  async function loadOrdersOnly(token: string) {
     const orderResponse = await listOrdersRequest(token, {
       page: 1,
-      pageSize: 120,
+      pageSize: 60,
       sortBy: "id",
       sortDir: "desc",
     });
-    const orderItems = orderResponse.items;
-    setOrders(orderItems);
+    setOrders(orderResponse.items);
+  }
 
-    const docs = await Promise.all(
-      orderItems.map(async (order) => {
-        try {
-          const doc = await getOrderFiscalRequest(token, order.id);
-          return [order.id, doc] as const;
-        } catch {
-          return [order.id, null] as const;
-        }
-      }),
-    );
-    const map: Record<number, FiscalDocument | null> = {};
-    docs.forEach(([orderId, doc]) => {
-      map[orderId] = doc;
-    });
-    setFiscalByOrder(map);
+  async function refreshFiscal(showToast = false) {
+    const token = getAccessToken();
+    if (!token) {
+      router.replace("/");
+      return;
+    }
+    setRefreshing(true);
+    try {
+      const [payload] = await Promise.all([dashboardSummaryRequest(token), loadOrdersOnly(token)]);
+      setSummary(payload);
+      setError("");
+      if (showToast) {
+        pushToast("Painel fiscal atualizado.", "success");
+      }
+    } catch (requestError) {
+      const message =
+        requestError instanceof Error ? requestError.message : "Erro ao carregar dashboard.";
+      if (message === "unauthorized") {
+        clearSession();
+        router.replace("/");
+        return;
+      }
+      setError(message);
+      if (showToast) {
+        pushToast("Falha ao atualizar painel fiscal.", "error");
+      }
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }
 
   function pushToast(message: string, type: "success" | "error") {
@@ -163,22 +177,7 @@ export default function FiscalPage() {
       return;
     }
 
-    Promise.all([dashboardSummaryRequest(token), loadOrdersAndFiscal(token)])
-      .then(([payload]) => {
-        setSummary(payload);
-        setError("");
-      })
-      .catch((requestError) => {
-        const message =
-          requestError instanceof Error ? requestError.message : "Erro ao carregar dashboard.";
-        if (message === "unauthorized") {
-          clearSession();
-          router.replace("/");
-          return;
-        }
-        setError(message);
-      })
-      .finally(() => setLoading(false));
+    void refreshFiscal(false);
   }, [router]);
 
   useEffect(() => {
@@ -199,37 +198,35 @@ export default function FiscalPage() {
 
   const fiscalRows = useMemo<FiscalRow[]>(() => {
     return orders.flatMap((order) => {
-      const fiscal = fiscalByOrder[order.id] ?? null;
-      if (!fiscal) {
-        return [];
-      }
+      const hasInvoiceRef = Boolean(order.invoice_number && String(order.invoice_number).trim());
+      const orderStatus = String(order.status || "").toUpperCase();
+      const mayBeFiscal = hasInvoiceRef || orderStatus.includes("INVOICED");
+      if (!mayBeFiscal) return [];
 
-      const model = fiscal.document_type === "NFCE" ? "NFC-e 65" : "NF-e 55";
-      const status = mapFiscalStatus(fiscal.status);
+      const model = "NF-e 55";
+      const status = mapFiscalStatus(order.status || "");
       const actions =
         status === "Autorizada"
-          ? model === "NF-e 55"
-            ? ["XML", "DANFE"]
-            : ["XML", "Cupom"]
+          ? ["XML", "DANFE"]
           : status.startsWith("Erro")
             ? ["Ver log"]
             : ["Consultar"];
 
       const numero =
-        fiscal.number?.trim() && fiscal.number !== "0"
-          ? String(fiscal.number).padStart(6, "0")
-          : String(fiscal.id).padStart(6, "0");
+        hasInvoiceRef
+          ? String(order.invoice_number).replace(/\D/g, "").padStart(6, "0").slice(-6)
+          : String(order.id).padStart(6, "0");
 
       return [
         {
-          id: fiscal.id,
+          id: order.id,
           orderId: order.id,
-          fiscalId: fiscal.id,
+          fiscalId: null,
           orderStatus: order.status,
           numero,
           modelo: model,
-          serie: fiscal.series || "001",
-          emissao: new Date(fiscal.issued_at ?? fiscal.created_at).toLocaleDateString("pt-BR"),
+          serie: "001",
+          emissao: new Date(order.invoiced_at ?? order.created_at).toLocaleDateString("pt-BR"),
           destinatario: order.client_name,
           doc: "--",
           valor: formatCurrency(order.total_amount),
@@ -238,7 +235,7 @@ export default function FiscalPage() {
         },
       ];
     });
-  }, [orders, fiscalByOrder]);
+  }, [orders]);
 
   const visibleRows = useMemo(() => [...manualRows, ...fiscalRows], [manualRows, fiscalRows]);
   const filteredRows = useMemo(() => {
@@ -288,20 +285,6 @@ export default function FiscalPage() {
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
-
-  const pageItems = useMemo(() => {
-    if (totalPages <= 1) return [1];
-    const out: Array<number | "..."> = [];
-    const push = (value: number | "...") => {
-      if (out[out.length - 1] !== value) out.push(value);
-    };
-    push(1);
-    if (currentPage > 3) push("...");
-    for (let p = Math.max(2, currentPage - 1); p <= Math.min(totalPages - 1, currentPage + 1); p += 1) push(p);
-    if (currentPage < totalPages - 2) push("...");
-    if (totalPages > 1) push(totalPages);
-    return out;
-  }, [currentPage, totalPages]);
 
   function openEmitModal() {
     setEmitModalOpen(true);
@@ -425,7 +408,7 @@ export default function FiscalPage() {
         await invoiceOrderRequest(token, row.orderId);
       }
       await emitOrderFiscalRequest(token, row.orderId, { series: "001" });
-      await loadOrdersAndFiscal(token);
+      await loadOrdersOnly(token);
       pushToast(`Venda ${row.numero} emitida no fiscal com sucesso.`, "success");
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "Falha ao emitir fiscal.";
@@ -469,24 +452,27 @@ export default function FiscalPage() {
         </section>
       ) : summary ? (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2a3045] px-3 pb-2 mb-3">
+          <div className="erp-page-header">
             <div className="flex items-center gap-3">
-              <h1 className="text-[24px] font-semibold leading-none text-[#e2e8f0]">Módulo Fiscal</h1>
-              <span className="text-[12px] text-[#64748b]">Visão geral fiscal e documentos emitidos</span>
+              <h1 className="erp-page-title">Módulo Fiscal</h1>
+              <span className="erp-page-subtitle">Visão geral fiscal e documentos emitidos</span>
             </div>
-            <div className="flex items-center gap-2">
-              <button className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-4 text-[13px] font-medium text-[#e2e8f0] transition hover:border-[#3a4260]">
+            <div className="erp-pagination-nav">
+              <button className="erp-btn erp-btn-secondary" disabled={refreshing} onClick={() => void refreshFiscal(true)} type="button">
+                {refreshing ? "Atualizando..." : "Atualizar"}
+              </button>
+              <button className="erp-btn erp-btn-secondary">
                 Importar XML
               </button>
-              <button className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-4 text-[13px] font-medium text-[#e2e8f0] transition hover:border-[#3a4260]">
+              <button className="erp-btn erp-btn-secondary">
                 Exportar XML
               </button>
               <button
-                className="h-10 flex items-center gap-2 rounded border border-[#1d4ed8] bg-[#2563eb] px-5 text-[13px] font-semibold text-white hover:bg-[#1d4ed8]"
+                className="erp-btn erp-btn-primary"
                 onClick={openEmitModal}
                 type="button"
               >
-                <span className="material-symbols-outlined">add</span>
+                <span className="erp-icon-plus">add</span>
                 Emitir NF-e
               </button>
             </div>
@@ -499,8 +485,8 @@ export default function FiscalPage() {
               { t: "ERROS DE TRANSMISSAO", v: String(totals.errors), s: "Acao imediata requerida", c: "bg-[#ef4444]", x: "120ms" },
               { t: "AUTORIZADAS", v: String(totals.authorized), s: "SEFAZ online", c: "bg-[#f59e0b]", x: "180ms" },
             ].map((card) => (
-              <article className={`group relative flex min-h-[118px] flex-col items-start justify-between overflow-hidden rounded-md border border-[#2a3045] bg-[#161a24] px-4 py-2.5 text-left transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[#3a4260] hover:shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${kpiReady ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"}`} key={card.t} style={{ transitionDelay: card.x }}>
-                <div className={`absolute inset-x-0 top-0 h-[2px] ${card.c}`} />
+              <article className={`erp-kpi-card flex min-h-[118px] flex-col items-start justify-between text-left transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[#3a4260] hover:shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${kpiReady ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"}`} key={card.t} style={{ transitionDelay: card.x }}>
+                <div className={`erp-kpi-line ${card.c}`} />
                 <p className="font-mono text-xs font-semibold uppercase tracking-wider text-[#475569]">{card.t}</p>
                 <h3 className="mt-1.5 font-mono text-3xl font-bold leading-none text-[#e2e8f0]">{card.v}</h3>
                 <p className="text-[11px] text-[#64748b]">{card.s}</p>
@@ -512,32 +498,28 @@ export default function FiscalPage() {
 
           <section className="rounded-md border border-[#2a3045] bg-[#161a24]">
             <div className="flex flex-wrap items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] px-4 py-2.5">
-              <div className="relative min-w-[260px] flex-1">
+              <div className="erp-list-search-wrap min-w-[260px]">
                 <input
-                  className="h-9 w-full rounded border border-[#2a3045] bg-[#161a24] px-3 pr-10 text-[13px] text-[#e2e8f0] placeholder:text-[#64748b] outline-none focus:border-[#3b82f6]"
+                  className="erp-list-search-input"
                   onChange={(e) => setQueryInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && setQuery(queryInput.trim())}
                   placeholder="Buscar por numero, destinatario, documento..."
                   value={queryInput}
                 />
-                <button
-                  className="absolute inset-y-0 right-1.5 my-auto inline-flex h-7 w-7 items-center justify-center rounded text-[#64748b] transition hover:text-[#e2e8f0]"
-                  onClick={() => setQuery(queryInput.trim())}
-                  type="button"
-                >
+                <button className="erp-list-search-btn" onClick={() => setQuery(queryInput.trim())} type="button">
                   <span className="material-symbols-outlined !text-[16px]">search</span>
                 </button>
               </div>
               <button
-                className="inline-flex h-9 items-center gap-1 rounded border border-[#2a3045] bg-[#cbd5e1] px-3 text-[13px] font-semibold text-[#1f2937] transition hover:bg-[#dbe4ef]"
+                className={`erp-filter-btn ${showFilters ? "erp-filter-btn-on" : "erp-filter-btn-off"}`}
                 onClick={() => setShowFilters((v) => !v)}
                 type="button"
               >
                 <span className="material-symbols-outlined !text-[16px]">tune</span>
                 Filtros
               </button>
-              <span className="ml-2 font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b]">ORDENAR:</span>
-              <select className="h-9 rounded border border-[#2a3045] bg-[#161a24] px-3 text-[13px] text-[#e2e8f0]" onChange={(e) => setSortBy(e.target.value as FiscalSortBy)} value={sortBy}>
+              <span className="erp-sort-label ml-2">ORDENAR:</span>
+              <select className="erp-list-sort-select" onChange={(e) => setSortBy(e.target.value as FiscalSortBy)} value={sortBy}>
                 <option value="recent">Mais recentes</option>
                 <option value="numero_asc">Numero A-Z</option>
                 <option value="numero_desc">Numero Z-A</option>
@@ -619,10 +601,14 @@ export default function FiscalPage() {
                 </thead>
                 <tbody>
                   {pagedRows.map((order) => (
-                    <tr className="border-b border-[#2a3045] transition hover:bg-[#1e2332]" key={order.id}>
+                    <tr
+                      className="cursor-pointer border-b border-[#2a3045] transition hover:bg-[#1e2332]"
+                      key={order.id}
+                      onClick={() => setDetailRow(order)}
+                    >
                       <td className="px-4 py-3 font-mono text-sm font-semibold text-[#e2e8f0]">{order.numero}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex rounded px-2 py-1 font-mono text-[11px] ${order.modelo === "NF-e 55" ? "bg-[#1e3a5f] text-[#93c5fd]" : "bg-[#14532d] text-[#86efac]"}`}>{order.modelo}</span>
+                        <span className={`erp-tag ${order.modelo === "NF-e 55" ? "erp-tag-info" : "erp-tag-success"}`}>{order.modelo}</span>
                       </td>
                       <td className="px-4 py-3 font-mono text-sm text-[#e2e8f0]">{order.serie}</td>
                       <td className="px-4 py-3 text-sm text-[#94a3b8]">{order.emissao}</td>
@@ -630,7 +616,7 @@ export default function FiscalPage() {
                       <td className="px-4 py-3 font-mono text-sm text-[#64748b]">{order.doc}</td>
                       <td className="px-4 py-3 font-mono text-sm font-semibold text-[#e2e8f0]">{order.valor}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex h-5 items-center gap-1 rounded-[2px] px-2 font-mono text-[10px] uppercase tracking-[0.08em] ${statusPill(order.status)}`}>
+                        <span className={`erp-tag ${statusPill(order.status)}`}>
                           {order.status}
                         </span>
                       </td>
@@ -638,9 +624,12 @@ export default function FiscalPage() {
                         <div className="flex flex-wrap gap-2">
                           {order.actions.map((action) => (
                             <button
-                              className="rounded border border-[#2a3045] bg-[#161a24] px-2.5 py-1 font-mono text-[11px] text-[#64748b] transition hover:border-[#3a4260] hover:text-[#e2e8f0]"
+                              className="erp-list-action-btn bg-[#161a24] px-2.5 py-1 text-[#64748b] hover:text-[#e2e8f0]"
                               key={`${order.orderId}-${action}`}
-                              onClick={() => handleRowAction(order, action)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleRowAction(order, action);
+                              }}
                               type="button"
                             >
                               {action}
@@ -653,42 +642,110 @@ export default function FiscalPage() {
                 </tbody>
               </table>
             </div>
-            <div className="flex items-center justify-between border-t border-[#2a3045] px-4 py-2 font-mono text-[12px] text-[#64748b]">
-              <span>{filteredRows.length === 0 ? "Mostrando 0-0" : `Mostrando ${startIndex + 1}-${endIndex}`}</span>
-              <div className="flex items-center gap-2">
+            <div className="erp-pagination-footer">
+              <span>{filteredRows.length === 0 ? "Mostrando 0-0" : `Mostrando ${startIndex + 1}-${endIndex} de ${filteredRows.length}`}</span>
+              <div className="erp-pagination-nav">
                 <button
-                  className="px-1 transition hover:text-[#e2e8f0] disabled:opacity-40 disabled:hover:text-[#64748b]"
+                  className="erp-list-action-btn h-7 px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
                   disabled={currentPage <= 1}
                   onClick={() => setPage((value) => Math.max(1, value - 1))}
                   type="button"
                 >
-                  ←
+                  Anterior
                 </button>
-                {pageItems.map((item, index) =>
-                  item === "..." ? (
-                    <span key={`dots-${index}`} className="px-0.5">...</span>
-                  ) : (
-                    <button
-                      key={item}
-                      className={`px-1 transition ${item === currentPage ? "text-[#e2e8f0]" : "hover:text-[#e2e8f0]"}`}
-                      onClick={() => setPage(item)}
-                      type="button"
-                    >
-                      {item}
-                    </button>
-                  ),
-                )}
+                <span className="text-[11px] text-[#94a3b8]">
+                  Pagina {currentPage} de {totalPages}
+                </span>
                 <button
-                  className="px-1 transition hover:text-[#e2e8f0] disabled:opacity-40 disabled:hover:text-[#64748b]"
+                  className="erp-list-action-btn h-7 px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
                   disabled={currentPage >= totalPages}
                   onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
                   type="button"
                 >
-                  →
+                  Proxima
                 </button>
               </div>
             </div>
           </section>
+        </div>
+      ) : null}
+      {detailRow ? (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/70 p-4">
+          <div className="h-[78vh] w-[min(1080px,98vw)] overflow-hidden rounded-md border border-[#2a3045] bg-[#0f1117] shadow-2xl">
+            <div className="flex h-full flex-col">
+              <div className="flex items-start gap-2 border-b border-[#2a3045] px-5 py-4">
+                <div>
+                  <h2 className="text-[16px] font-semibold text-[#e2e8f0]">Documento fiscal #{detailRow.numero}</h2>
+                  <p className="mt-1 font-mono text-[11px] text-[#64748b]">{detailRow.destinatario} · {detailRow.emissao}</p>
+                </div>
+                <div className="ml-auto flex gap-2">
+                  <button className="erp-btn erp-btn-secondary" onClick={() => setDetailRow(null)} type="button">
+                    Fechar
+                  </button>
+                </div>
+              </div>
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 lg:grid-cols-[1.7fr_1fr]">
+                <div className="space-y-3 overflow-y-auto p-4">
+                  <section className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                    <article className="rounded border border-[#2a3045] bg-[#161a24] p-3">
+                      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Numero</p>
+                      <p className="mt-1 font-mono text-[16px] font-semibold text-[#e2e8f0]">{detailRow.numero}</p>
+                    </article>
+                    <article className="rounded border border-[#2a3045] bg-[#161a24] p-3">
+                      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Modelo</p>
+                      <p className="mt-1 text-[15px] font-semibold text-[#e2e8f0]">{detailRow.modelo}</p>
+                    </article>
+                    <article className="rounded border border-[#2a3045] bg-[#161a24] p-3">
+                      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Serie</p>
+                      <p className="mt-1 font-mono text-[16px] font-semibold text-[#e2e8f0]">{detailRow.serie}</p>
+                    </article>
+                    <article className="rounded border border-[#2a3045] bg-[#161a24] p-3">
+                      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Valor</p>
+                      <p className="mt-1 font-mono text-[16px] font-semibold text-[#22c55e]">{detailRow.valor}</p>
+                    </article>
+                  </section>
+                  <section className="overflow-hidden rounded border border-[#2a3045] bg-[#161a24]">
+                    <div className="grid grid-cols-[1.2fr_1.8fr_1fr_1fr_1fr] border-b border-[#2a3045] bg-[#1e2332] px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-[#64748b]">
+                      <span>Documento</span>
+                      <span>Destinatario</span>
+                      <span>Emissao</span>
+                      <span>Status</span>
+                      <span>Origem</span>
+                    </div>
+                    <div className="grid grid-cols-[1.2fr_1.8fr_1fr_1fr_1fr] items-center px-3 py-3 text-[13px] text-[#e2e8f0]">
+                      <span className="font-mono">{detailRow.numero}</span>
+                      <span>{detailRow.destinatario}</span>
+                      <span className="font-mono">{detailRow.emissao}</span>
+                      <span>
+                        <span className={`erp-tag ${statusPill(detailRow.status)}`}>{detailRow.status}</span>
+                      </span>
+                      <span className="font-mono">Pedido #{String(detailRow.orderId).padStart(6, "0")}</span>
+                    </div>
+                  </section>
+                </div>
+                <aside className="overflow-y-auto border-l border-[#2a3045] bg-[#111827] p-4">
+                  <h3 className="mb-2 text-[13px] font-semibold uppercase tracking-[0.08em] text-[#94a3b8]">Timeline</h3>
+                  <div className="space-y-2">
+                    <div className="rounded border border-[#2a3045] bg-[#161a24] p-3">
+                      <p className="font-mono text-[11px] text-[#93c5fd]">Documento criado</p>
+                      <p className="mt-1 text-[13px] text-[#e2e8f0]">Registro inicial da nota fiscal</p>
+                      <p className="mt-1 font-mono text-[10px] text-[#64748b]">{detailRow.emissao}</p>
+                    </div>
+                    <div className="rounded border border-[#2a3045] bg-[#161a24] p-3">
+                      <p className="font-mono text-[11px] text-[#93c5fd]">Status atual</p>
+                      <p className="mt-1 text-[13px] text-[#e2e8f0]">{detailRow.status}</p>
+                      <p className="mt-1 font-mono text-[10px] text-[#64748b]">Atualizacao em tempo real</p>
+                    </div>
+                    <div className="rounded border border-[#2a3045] bg-[#161a24] p-3">
+                      <p className="font-mono text-[11px] text-[#93c5fd]">Integracao comercial</p>
+                      <p className="mt-1 text-[13px] text-[#e2e8f0]">Origem: pedido #{String(detailRow.orderId).padStart(6, "0")}</p>
+                      <p className="mt-1 font-mono text-[10px] text-[#64748b]">Serie {detailRow.serie}</p>
+                    </div>
+                  </div>
+                </aside>
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
       {emitModalOpen ? (
@@ -938,8 +995,9 @@ export default function FiscalPage() {
                       />
                     </label>
                     <div className="flex items-end">
-                      <button className="h-10 min-w-[150px] rounded border border-[#2a3045] bg-[#1e2332] px-4 text-sm text-[#94a3b8] transition hover:border-[#3a4260] hover:text-[#e2e8f0]" type="button">
-                        + Add forma
+                      <button className="inline-flex h-10 min-w-[150px] items-center justify-center gap-2 rounded border border-[#2a3045] bg-[#1e2332] px-4 text-sm text-[#94a3b8] transition hover:border-[#3a4260] hover:text-[#e2e8f0]" type="button">
+                        <span className="erp-icon-plus">add</span>
+                        Adicionar forma
                       </button>
                     </div>
                   </div>

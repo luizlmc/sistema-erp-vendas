@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Product,
   ProductCreatePayload,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/api";
 import { ErpShell } from "@/components/ErpShell";
 import { clearSession, getAccessToken } from "@/lib/session";
+const ACTIVE_PRODUCTS_QUERY_KEY = ["catalog", "products", "active"] as const;
 
 type SortBy = "recent" | "amount_desc" | "amount_asc" | "name_asc" | "name_desc";
 type StatusFilter = "all" | "active" | "inactive";
@@ -176,6 +178,7 @@ const dmy = (value?: string | null) => {
 
 export default function ProductsPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [items, setItems] = useState<Product[]>([]);
   const [extrasById, setExtrasById] = useState<Record<number, Extras>>({});
   const [loading, setLoading] = useState(true);
@@ -332,20 +335,6 @@ export default function ProductsPage() {
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
-
-  const pageItems = useMemo(() => {
-    if (totalPages <= 1) return [1];
-    const out: Array<number | "..."> = [];
-    const push = (value: number | "...") => {
-      if (out[out.length - 1] !== value) out.push(value);
-    };
-    push(1);
-    if (currentPage > 3) push("...");
-    for (let p = Math.max(2, currentPage - 1); p <= Math.min(totalPages - 1, currentPage + 1); p += 1) push(p);
-    if (currentPage < totalPages - 2) push("...");
-    if (totalPages > 1) push(totalPages);
-    return out;
-  }, [currentPage, totalPages]);
 
   const kpi = useMemo(() => {
     const total = items.reduce((acc, p) => acc + Math.max(0, p.stock_qty) * Math.max(0, p.unit_price), 0);
@@ -542,6 +531,7 @@ export default function ProductsPage() {
         setExtrasById((current) => ({ ...current, [editingId]: { ...form.extras } }));
         pushToast("Produto atualizado com sucesso.", "success");
       }
+      await queryClient.invalidateQueries({ queryKey: ACTIVE_PRODUCTS_QUERY_KEY });
       setReload((r) => r + 1);
       setModalOpen(false);
     } catch (requestError) {
@@ -561,6 +551,7 @@ export default function ProductsPage() {
       setDeleting(true);
       await deleteProductRequest(token, editingId);
       pushToast("Produto inativado com sucesso.", "success");
+      await queryClient.invalidateQueries({ queryKey: ACTIVE_PRODUCTS_QUERY_KEY });
       setReload((r) => r + 1);
       setModalOpen(false);
     } catch (requestError) {
@@ -575,25 +566,21 @@ export default function ProductsPage() {
   return (
     <ErpShell activeNav="produtos" onLogout={() => { clearSession(); router.replace("/"); }} pageTitle="Cadastro de Produtos" headerRight={<div />}>
       <div className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2a3045] px-3 pb-2 mb-3">
+        <div className="erp-page-header">
           <div className="flex items-center gap-3">
-            <h1 className="text-[24px] font-semibold leading-none text-[#e2e8f0]">Produtos</h1>
-            <span className="text-[12px] text-[#64748b]">Visão geral do cadastro</span>
+            <h1 className="erp-page-title">Produtos</h1>
+            <span className="erp-page-subtitle">Visão geral do cadastro</span>
           </div>
           <div className="flex items-center gap-2">
             <button
-              className="h-10 rounded-md border border-[#3a4260] bg-[#1e2332] px-3 text-[14px] font-medium text-[#e2e8f0] transition hover:border-[#4b556d] hover:bg-[#242a3b]"
+              className="erp-btn erp-btn-secondary"
               onClick={() => setReload((r) => r + 1)}
               type="button"
             >
-              ↻ Atualizar
+              Atualizar
             </button>
-            <button
-              className="h-10 flex items-center gap-2 rounded border border-[#1d4ed8] bg-[#2563eb] px-5 text-[13px] font-semibold text-white hover:bg-[#1d4ed8]"
-              onClick={openCreate}
-              type="button"
-            >
-              <span className="material-symbols-outlined">add</span>
+            <button className="erp-btn erp-btn-primary" onClick={openCreate} type="button">
+              <span className="erp-icon-plus">add</span>
               Novo produto
             </button>
           </div>
@@ -608,10 +595,10 @@ export default function ProductsPage() {
           ].map((card) => (
             <article
               key={card.t}
-              className={`group relative flex min-h-[118px] flex-col items-start justify-between overflow-hidden rounded-md border border-[#2a3045] bg-[#161a24] px-4 py-2.5 text-left transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[#3a4260] hover:shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${kpiReady ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"}`}
+              className={`erp-kpi-card flex min-h-[118px] flex-col items-start justify-between text-left transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[#3a4260] hover:shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${kpiReady ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"}`}
               style={{ transitionDelay: card.d }}
             >
-              <div className={`absolute inset-x-0 top-0 h-[2px] ${card.c}`} />
+              <div className={`erp-kpi-line ${card.c}`} />
               <p className="font-mono text-xs font-semibold uppercase tracking-wider text-[#475569]">{card.t}</p>
               <h2 className="mt-1.5 font-mono text-3xl font-bold leading-none text-[#e2e8f0]">{card.v}</h2>
               <p className="mt-1.5 text-[11px] text-[#64748b]">{card.s}</p>
@@ -621,25 +608,21 @@ export default function ProductsPage() {
 
         <section className="rounded-md border border-[#2a3045] bg-[#161a24]">
           <div className="flex flex-wrap items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] px-4 py-2.5">
-            <div className="relative min-w-[260px] flex-1">
+            <div className="erp-list-search-wrap min-w-[260px]">
               <input
-                className="h-9 w-full rounded border border-[#2a3045] bg-[#161a24] pl-3 pr-10 text-[13px] text-[#e2e8f0] placeholder:text-[#64748b] outline-none focus:border-[#3b82f6]"
+                className="erp-list-search-input pl-3"
                 onChange={(e) => setQueryInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && setQuery(queryInput.trim())}
                 placeholder="Buscar por descricao, SKU, NCM..."
                 value={queryInput}
               />
-              <button
-                className="absolute inset-y-0 right-1.5 my-auto inline-flex h-7 w-7 items-center justify-center rounded text-[#64748b] transition hover:text-[#e2e8f0]"
-                onClick={() => setQuery(queryInput.trim())}
-                type="button"
-              >
+              <button className="erp-list-search-btn" onClick={() => setQuery(queryInput.trim())} type="button">
                 <span className="material-symbols-outlined !text-[16px]">search</span>
               </button>
             </div>
-            <button className="inline-flex h-9 items-center gap-1 rounded border border-[#2a3045] bg-[#cbd5e1] px-3 text-[13px] font-semibold text-[#1f2937] transition hover:bg-[#dbe4ef]" onClick={() => setShowFilters((v) => !v)} type="button"><span className="material-symbols-outlined !text-[16px]">tune</span>Filtros</button>
-            <span className="ml-2 font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b]">ORDENAR:</span>
-            <select className="h-9 rounded border border-[#2a3045] bg-[#161a24] px-3 text-[13px] text-[#e2e8f0] outline-none focus:border-[#3b82f6]" onChange={(e) => setSortBy(e.target.value as SortBy)} value={sortBy}>
+            <button className={`erp-filter-btn ${showFilters ? "erp-filter-btn-on" : "erp-filter-btn-off"}`} onClick={() => setShowFilters((v) => !v)} type="button"><span className="material-symbols-outlined !text-[16px]">tune</span>Filtros</button>
+            <span className="erp-sort-label ml-2">ORDENAR:</span>
+            <select className="erp-list-sort-select outline-none focus:border-[#3b82f6]" onChange={(e) => setSortBy(e.target.value as SortBy)} value={sortBy}>
               <option value="recent">Mais recentes</option>
               <option value="amount_desc">Preco maior</option>
               <option value="amount_asc">Preco menor</option>
@@ -747,7 +730,7 @@ export default function ProductsPage() {
                       <p className="mt-0.5 text-[10px] text-[#64748b]">{dmy(p.updated_at)}</p>
                     </div>
                     <div>
-                      <span className={`inline-flex h-5 items-center rounded-[2px] px-2 font-mono text-[10px] uppercase tracking-[0.08em] ${statusClass}`}>
+                      <span className={`erp-tag ${statusClass}`}>
                         {!p.is_active ? "Inativo" : p.stock_qty <= min ? "Critico" : "Ativo"}
                       </span>
                     </div>
@@ -762,41 +745,28 @@ export default function ProductsPage() {
                 );
               })
             )}
-            {!loading ? (
-              <div className="flex items-center justify-between border-t border-[#2a3045] px-4 py-2 font-mono text-[12px] text-[#64748b]">
-                <span>
-                  {filtered.length === 0 ? "Mostrando 0-0" : `Mostrando ${startIndex + 1}-${endIndex}`}
-                </span>
-                <div className="flex items-center gap-2">
+                        {!loading ? (
+              <div className="erp-pagination-footer">
+                <span>{filtered.length === 0 ? "Mostrando 0-0" : `Mostrando ${startIndex + 1}-${endIndex} de ${filtered.length}`}</span>
+                <div className="erp-pagination-nav">
                   <button
-                    className="px-1 transition hover:text-[#e2e8f0] disabled:opacity-40 disabled:hover:text-[#64748b]"
+                    className="erp-list-action-btn h-7 px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
                     disabled={currentPage <= 1}
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
                     type="button"
                   >
-                    ←
+                    Anterior
                   </button>
-                  {pageItems.map((item, index) =>
-                    item === "..." ? (
-                      <span key={`dots-${index}`} className="px-0.5">...</span>
-                    ) : (
-                      <button
-                        key={item}
-                        className={`px-1 transition ${item === currentPage ? "text-[#e2e8f0]" : "hover:text-[#e2e8f0]"}`}
-                        onClick={() => setPage(item)}
-                        type="button"
-                      >
-                        {item}
-                      </button>
-                    ),
-                  )}
+                  <span className="text-[11px] text-[#94a3b8]">
+                    Pagina {currentPage} de {totalPages}
+                  </span>
                   <button
-                    className="px-1 transition hover:text-[#e2e8f0] disabled:opacity-40 disabled:hover:text-[#64748b]"
+                    className="erp-list-action-btn h-7 px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
                     disabled={currentPage >= totalPages}
                     onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
                     type="button"
                   >
-                    →
+                    Proxima
                   </button>
                 </div>
               </div>
@@ -1157,3 +1127,4 @@ export default function ProductsPage() {
     </ErpShell>
   );
 }
+

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { Inter, Manrope } from "next/font/google";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { QueryProvider } from "@/components/QueryProvider";
 import "./globals.css";
 
 const inter = Inter({
@@ -44,7 +45,9 @@ export default async function RootLayout({
         />
       </head>
       <body>
-        <ThemeProvider initialTheme={savedTheme}>{children}</ThemeProvider>
+        <QueryProvider>
+          <ThemeProvider initialTheme={savedTheme}>{children}</ThemeProvider>
+        </QueryProvider>
       </body>
     </html>
   );

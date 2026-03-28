@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { ErpShell } from "@/components/ErpShell";
 import { clearSession, getAccessToken } from "@/lib/session";
 import {
@@ -16,6 +17,8 @@ import {
 
 type PaymentType = "Dinheiro" | "Credito" | "Debito" | "Pix";
 type CartItem = { id: number; qty: number };
+const ACTIVE_CLIENTS_QUERY_KEY = ["catalog", "clients", "active"] as const;
+const ACTIVE_PRODUCTS_QUERY_KEY = ["catalog", "products", "active"] as const;
 
 const money = (v: number) =>
   `R$ ${Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
@@ -46,10 +49,12 @@ function getCategory(name: string) {
 
 export default function PdvPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<ClientApiItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [category, setCategory] = useState("Todos");
   const [clientName, setClientName] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -66,6 +71,11 @@ export default function PdvPage() {
   }
 
   useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 400);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
     const token = getAccessToken();
     if (!token) {
       router.replace("/");
@@ -75,19 +85,29 @@ export default function PdvPage() {
     setLoading(true);
 
     Promise.all([
-      listProductsRequest(token, {
-        page: 1,
-        pageSize: 500,
-        sortBy: "name",
-        sortDir: "asc",
-        isActive: "true",
+      queryClient.fetchQuery({
+        queryKey: [...ACTIVE_PRODUCTS_QUERY_KEY, token],
+        queryFn: () =>
+          listProductsRequest(token, {
+            page: 1,
+            pageSize: 120,
+            sortBy: "name",
+            sortDir: "asc",
+            isActive: "true",
+          }),
+        staleTime: 90_000,
       }),
-      listClientsRequest(token, {
-        page: 1,
-        pageSize: 200,
-        sortBy: "name",
-        sortDir: "asc",
-        isActive: "true",
+      queryClient.fetchQuery({
+        queryKey: [...ACTIVE_CLIENTS_QUERY_KEY, token],
+        queryFn: () =>
+          listClientsRequest(token, {
+            page: 1,
+            pageSize: 120,
+            sortBy: "name",
+            sortDir: "asc",
+            isActive: "true",
+          }),
+        staleTime: 90_000,
       }),
     ])
       .then(([productsRes, clientsRes]) => {
@@ -110,7 +130,7 @@ export default function PdvPage() {
     return () => {
       cancel = true;
     };
-  }, [router]);
+  }, [router, queryClient]);
 
   const categories = useMemo(() => {
     const set = new Set<string>(["Todos"]);
@@ -119,7 +139,7 @@ export default function PdvPage() {
   }, [products]);
 
   const visibleProducts = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = debouncedQuery.trim().toLowerCase();
     return products.filter((p) => {
       const cat = getCategory(p.name || "");
       if (category !== "Todos" && cat !== category) return false;
@@ -130,7 +150,7 @@ export default function PdvPage() {
         (p.gtin || "").includes(q)
       );
     });
-  }, [products, query, category]);
+  }, [products, debouncedQuery, category]);
 
   const cartLines = useMemo(
     () =>
@@ -175,12 +195,17 @@ export default function PdvPage() {
   async function reloadProducts() {
     const token = getAccessToken();
     if (!token) return;
-    const res = await listProductsRequest(token, {
-      page: 1,
-      pageSize: 500,
-      sortBy: "name",
-      sortDir: "asc",
-      isActive: "true",
+    const res = await queryClient.fetchQuery({
+      queryKey: [...ACTIVE_PRODUCTS_QUERY_KEY, token],
+      queryFn: () =>
+        listProductsRequest(token, {
+          page: 1,
+          pageSize: 120,
+          sortBy: "name",
+          sortDir: "asc",
+          isActive: "true",
+        }),
+      staleTime: 30_000,
     });
     setProducts(res.items.filter((p) => p.is_active));
   }

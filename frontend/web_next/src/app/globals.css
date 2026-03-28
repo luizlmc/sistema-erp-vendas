@@ -58,6 +58,18 @@ textarea {
   font: inherit;
 }
 
+.erp-shell button:not(:disabled) {
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    filter 160ms ease;
+}
+
+.erp-shell button:not(:disabled):hover {
+  filter: brightness(1.05);
+}
+
 input:focus,
 select:focus,
 textarea:focus,
@@ -72,6 +84,223 @@ textarea:focus-visible {
 a {
   color: inherit;
   text-decoration: none;
+}
+
+@layer components {
+  .erp-page-header {
+    @apply mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-[#2a3045] px-3 pb-2;
+  }
+
+  .erp-page-title {
+    @apply text-[24px] font-semibold leading-none text-[#e2e8f0];
+    font-family: var(--font-headline), "Manrope", "Segoe UI", sans-serif;
+  }
+
+  .erp-page-subtitle {
+    @apply text-[12px] text-[#64748b];
+  }
+
+  .erp-page-header > div:first-child {
+    @apply flex flex-col items-start;
+    row-gap: 0 !important;
+    column-gap: 0 !important;
+  }
+
+  .erp-page-header .erp-page-subtitle {
+    @apply mt-1 block;
+    line-height: 1.2;
+  }
+
+  .erp-list-sort-select {
+    @apply h-9 rounded border border-[#2a3045] bg-[#161a24] px-3 text-[13px] text-[#e2e8f0];
+  }
+
+  .erp-table-head-cell {
+    @apply font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b];
+  }
+
+  .erp-table-row-main {
+    @apply text-[14px] text-[#e2e8f0];
+  }
+
+  .erp-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded border px-4 text-[13px] font-medium;
+    min-height: 2.5rem;
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease,
+      color 160ms ease,
+      filter 160ms ease;
+  }
+
+  .erp-btn:hover {
+    filter: brightness(1.05);
+  }
+
+  .erp-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    filter: none;
+  }
+
+  .erp-btn-primary {
+    border-color: #1d4ed8;
+    background-color: #2563eb;
+    color: #ffffff;
+    font-weight: 600;
+  }
+
+  .erp-btn-secondary {
+    border-color: #2a3045;
+    background-color: #1e2332;
+    color: #e2e8f0;
+  }
+
+  .erp-btn-neutral {
+    border-color: #2a3045;
+    background-color: #161a24;
+    color: #94a3b8;
+  }
+
+  .erp-btn-success {
+    border-color: #166534;
+    background-color: #14532d;
+    color: #86efac;
+  }
+
+  .erp-btn-danger {
+    border-color: #991b1b;
+    background-color: #7f1d1d;
+    color: #fca5a5;
+  }
+
+  .erp-kpi-card {
+    position: relative;
+    overflow: hidden;
+    border-radius: 0.375rem;
+    border: 1px solid #2a3045;
+    background-color: #161a24;
+    padding: 0.75rem 1rem;
+  }
+
+  .erp-kpi-line {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 2px;
+    width: 100%;
+  }
+
+  .erp-icon-plus {
+    font-family: "Material Symbols Outlined";
+    font-weight: 400;
+    font-style: normal;
+    font-size: 18px;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    direction: ltr;
+    -webkit-font-smoothing: antialiased;
+    font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  }
+
+  .erp-list-search-wrap {
+    @apply relative min-w-[240px] flex-1;
+  }
+
+  .erp-list-search-input {
+    @apply h-9 w-full rounded border border-[#2a3045] bg-[#161a24] px-3 pr-10 text-[13px] text-[#e2e8f0] placeholder:text-[#64748b];
+  }
+
+  .erp-list-search-btn {
+    @apply absolute inset-y-0 right-1.5 my-auto inline-flex h-7 w-7 items-center justify-center rounded text-[#64748b];
+    transition: color 160ms ease;
+  }
+
+  .erp-list-search-btn:hover {
+    color: #e2e8f0;
+  }
+
+  .erp-filter-btn {
+    @apply inline-flex h-9 items-center gap-1.5 rounded border px-3 text-[13px];
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease,
+      color 160ms ease;
+  }
+
+  .erp-filter-btn-off {
+    @apply border-[#2a3045] bg-[#161a24] text-[#94a3b8];
+  }
+
+  .erp-filter-btn-off:hover {
+    border-color: #3a4260;
+    color: #e2e8f0;
+  }
+
+  .erp-filter-btn-on {
+    @apply border-[#3b82f6] bg-[#1e3a5f] text-[#e2e8f0];
+  }
+
+  .erp-sort-label {
+    @apply ml-auto font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b];
+  }
+
+  .erp-tag {
+    @apply inline-flex h-5 items-center rounded-[2px] px-2 font-mono text-[10px] uppercase tracking-[0.08em];
+  }
+
+  .erp-tag-success {
+    @apply bg-[#14532d] text-[#86efac];
+  }
+
+  .erp-tag-info {
+    @apply bg-[#1e3a5f] text-[#93c5fd];
+  }
+
+  .erp-tag-warn {
+    @apply bg-[#451a03] text-[#fbbf24];
+  }
+
+  .erp-tag-danger {
+    @apply bg-[#7f1d1d] text-[#fca5a5];
+  }
+
+  .erp-tag-neutral {
+    @apply bg-[#1e2332] text-[#94a3b8];
+  }
+
+  .erp-pagination-footer {
+    @apply flex items-center justify-between border-t border-[#2a3045] px-4 py-2 font-mono text-[12px] text-[#64748b];
+  }
+
+  .erp-pagination-nav {
+    @apply flex items-center gap-2;
+  }
+
+  .erp-pagination-btn {
+    @apply px-1;
+    transition: color 160ms ease, opacity 160ms ease;
+  }
+
+  .erp-pagination-btn:hover {
+    color: #e2e8f0;
+  }
+
+  .erp-pagination-btn:disabled {
+    opacity: 0.4;
+  }
+
+  .erp-list-action-btn {
+    @apply h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#e2e8f0];
+  }
+
+  .erp-list-action-btn:hover {
+    border-color: #3a4260;
+    background-color: #253049;
+  }
 }
 
 /* Theme light overrides for pages still using dark utility tokens */
@@ -153,4 +382,119 @@ a {
 
 .theme-light .hover\:text-\[\#e2e8f0\]:hover {
   color: #0f172a !important;
+}
+
+.theme-light .erp-btn-secondary {
+  border-color: #b0bcce;
+  background-color: #eef1f7;
+  color: #0f172a;
+}
+
+.theme-light .erp-btn-neutral {
+  border-color: #b0bcce;
+  background-color: #ffffff;
+  color: #475569;
+}
+
+.theme-light .erp-btn-success {
+  border-color: #15803d;
+  background-color: #166534;
+  color: #dcfce7;
+}
+
+.theme-light .erp-btn-danger {
+  border-color: #fca5a5;
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.theme-light .erp-kpi-card {
+  border-color: #d1d9e6 !important;
+  background-color: #ffffff !important;
+}
+
+.theme-light .erp-list-search-input {
+  border-color: #d1d9e6 !important;
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+.theme-light .erp-list-search-input::placeholder {
+  color: #64748b !important;
+}
+
+.theme-light .erp-list-search-btn {
+  color: #64748b !important;
+}
+
+.theme-light .erp-list-search-btn:hover {
+  color: #0f172a !important;
+}
+
+.theme-light .erp-filter-btn-off {
+  border-color: #d1d9e6 !important;
+  background-color: #ffffff !important;
+  color: #475569 !important;
+}
+
+.theme-light .erp-filter-btn-off:hover {
+  border-color: #b0bcce !important;
+  color: #0f172a !important;
+}
+
+.theme-light .erp-filter-btn-on {
+  border-color: #3b82f6 !important;
+  background-color: #dbeafe !important;
+  color: #0f172a !important;
+}
+
+.theme-light .erp-sort-label {
+  color: #64748b !important;
+}
+
+.theme-light .erp-page-title {
+  color: #0f172a !important;
+}
+
+.theme-light .erp-page-subtitle {
+  color: #475569 !important;
+}
+
+.theme-light .erp-list-sort-select {
+  border-color: #d1d9e6 !important;
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+.theme-light .erp-table-head-cell {
+  color: #64748b !important;
+}
+
+.theme-light .erp-table-row-main {
+  color: #0f172a !important;
+}
+
+.theme-light .erp-tag-neutral {
+  background-color: #e2e8f0 !important;
+  color: #475569 !important;
+}
+
+.theme-light .erp-pagination-footer {
+  border-top-color: #d1d9e6 !important;
+  color: #64748b !important;
+}
+
+.theme-light .erp-pagination-btn:hover {
+  color: #0f172a !important;
+}
+
+.theme-light .erp-list-action-btn {
+  border-color: #d1d9e6 !important;
+  background-color: #eef1f7 !important;
+  color: #0f172a !important;
+}
+
+.theme-light .erp-list-action-btn:hover {
+  border-color: #b0bcce !important;
+  background-color: #e2e8f0 !important;
 }

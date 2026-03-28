@@ -18,15 +18,24 @@ type
     Items: TArray<TQuoteItemInput>;
   end;
 
+  TUpdateQuoteInput = record
+    ClientId: Int64;
+    Notes: string;
+    UpdatedByUserId: Int64;
+    Items: TArray<TQuoteItemInput>;
+  end;
+
   TQuoteService = class
   public
     class function ListQuotesJson(const AParams: TListQueryParams): string; static;
     class function GetQuoteJson(const AId: Int64): string; static;
+    class function GetQuoteHistoryJson(const AId: Int64): string; static;
     class function CreateQuote(const AInput: TCreateQuoteInput): Int64; static;
-    class function ApproveQuote(const AId: Int64): Boolean; static;
-    class function RejectQuote(const AId: Int64): Boolean; static;
-    class function CancelQuote(const AId: Int64): Boolean; static;
-    class function ConvertQuoteToOrder(const AId: Int64): Int64; static;
+    class function UpdateQuote(const AId: Int64; const AInput: TUpdateQuoteInput): Boolean; static;
+    class function ApproveQuote(const AId: Int64; const AUserId: Int64 = 0): Boolean; static;
+    class function RejectQuote(const AId: Int64; const AUserId: Int64 = 0): Boolean; static;
+    class function CancelQuote(const AId: Int64; const AUserId: Int64 = 0): Boolean; static;
+    class function ConvertQuoteToOrder(const AId: Int64; const AUserId: Int64 = 0): Int64; static;
   end;
 
 implementation
@@ -63,6 +72,38 @@ begin
   if AQuery.IsEmpty then
     raise Exception.Create('Cliente nao encontrado ou inativo.');
   AQuery.Close;
+end;
+
+procedure LogQuoteStatus(
+  const AQuery: TFDQuery;
+  const AQuoteId: Int64;
+  const AOldStatus: string;
+  const ANewStatus: string;
+  const AAction: string;
+  const ANote: string;
+  const AUserId: Int64
+);
+begin
+  AQuery.SQL.Text :=
+    'INSERT INTO erp_quote_status_history ' +
+    '(quote_id, old_status, new_status, action, note, changed_by_user_id) ' +
+    'VALUES (:quote_id, :old_status, :new_status, :action, :note, :changed_by_user_id)';
+  AQuery.ParamByName('quote_id').AsLargeInt := AQuoteId;
+  if Trim(AOldStatus) = '' then
+    AQuery.ParamByName('old_status').Clear
+  else
+    AQuery.ParamByName('old_status').AsString := UpperCase(Trim(AOldStatus));
+  AQuery.ParamByName('new_status').AsString := UpperCase(Trim(ANewStatus));
+  AQuery.ParamByName('action').AsString := UpperCase(Trim(AAction));
+  if Trim(ANote) = '' then
+    AQuery.ParamByName('note').Clear
+  else
+    AQuery.ParamByName('note').AsString := Trim(ANote);
+  if AUserId > 0 then
+    AQuery.ParamByName('changed_by_user_id').AsLargeInt := AUserId
+  else
+    AQuery.ParamByName('changed_by_user_id').Clear;
+  AQuery.ExecSQL;
 end;
 
 class function TQuoteService.ListQuotesJson(const AParams: TListQueryParams): string;
@@ -313,6 +354,64 @@ begin
   end;
 end;
 
+class function TQuoteService.GetQuoteHistoryJson(const AId: Int64): string;
+var
+  LConnection: TFDConnection;
+  LQuery: TFDQuery;
+  LRoot: TJSONObject;
+  LList: TJSONArray;
+  LItem: TJSONObject;
+begin
+  LConnection := TConnectionFactory.NewConnection;
+  LQuery := TFDQuery.Create(nil);
+  LRoot := TJSONObject.Create;
+  LList := TJSONArray.Create;
+  try
+    LQuery.Connection := LConnection;
+    LQuery.SQL.Text :=
+      'SELECT h.id, h.old_status, h.new_status, h.action, h.note, h.changed_at, u.name AS changed_by_name ' +
+      'FROM erp_quote_status_history h ' +
+      'LEFT JOIN erp_users u ON u.id = h.changed_by_user_id ' +
+      'WHERE h.quote_id = :quote_id ' +
+      'ORDER BY h.changed_at DESC, h.id DESC';
+    LQuery.ParamByName('quote_id').AsLargeInt := AId;
+    LQuery.Open;
+
+    while not LQuery.Eof do
+    begin
+      LItem := TJSONObject.Create;
+      LItem.AddPair('id', TJSONNumber.Create(LQuery.FieldByName('id').AsLargeInt));
+      if LQuery.FieldByName('old_status').IsNull then
+        LItem.AddPair('old_status', TJSONNull.Create)
+      else
+        LItem.AddPair('old_status', LQuery.FieldByName('old_status').AsString);
+      LItem.AddPair('new_status', LQuery.FieldByName('new_status').AsString);
+      LItem.AddPair('action', LQuery.FieldByName('action').AsString);
+      if LQuery.FieldByName('note').IsNull then
+        LItem.AddPair('note', TJSONNull.Create)
+      else
+        LItem.AddPair('note', LQuery.FieldByName('note').AsString);
+      if LQuery.FieldByName('changed_by_name').IsNull then
+        LItem.AddPair('changed_by_name', TJSONNull.Create)
+      else
+        LItem.AddPair('changed_by_name', LQuery.FieldByName('changed_by_name').AsString);
+      LItem.AddPair('changed_at', LQuery.FieldByName('changed_at').AsString);
+      LList.AddElement(LItem);
+      LQuery.Next;
+    end;
+
+    LRoot.AddPair('items', LList);
+    LList := nil;
+    Result := LRoot.ToJSON;
+  finally
+    if Assigned(LList) then
+      LList.Free;
+    LRoot.Free;
+    LQuery.Free;
+    LConnection.Free;
+  end;
+end;
+
 class function TQuoteService.CreateQuote(const AInput: TCreateQuoteInput): Int64;
 var
   LConnection: TFDConnection;
@@ -377,6 +476,16 @@ begin
       LQuery.ParamByName('total_amount').AsFloat := LTotal;
       LQuery.ParamByName('id').AsLargeInt := LQuoteId;
       LQuery.ExecSQL;
+      LogQuoteStatus(
+        LQuery,
+        LQuoteId,
+        '',
+        'DRAFTING',
+        'CREATED',
+        'Orcamento criado.',
+        AInput.CreatedByUserId
+      );
+
       LConnection.Commit;
       Result := LQuoteId;
     except
@@ -389,7 +498,120 @@ begin
   end;
 end;
 
-class function TQuoteService.ApproveQuote(const AId: Int64): Boolean;
+class function TQuoteService.UpdateQuote(const AId: Int64; const AInput: TUpdateQuoteInput): Boolean;
+var
+  LConnection: TFDConnection;
+  LQuery: TFDQuery;
+  LItemQuery: TFDQuery;
+  LStatus: string;
+  LLineNo: Integer;
+  LLineTotal: Double;
+  LUnitPrice: Double;
+  LTotal: Double;
+  I: Integer;
+begin
+  Result := False;
+  if AInput.ClientId <= 0 then
+    raise Exception.Create('Cliente invalido.');
+  if Length(AInput.Items) = 0 then
+    raise Exception.Create('Orcamento deve conter ao menos um item.');
+
+  LConnection := TConnectionFactory.NewConnection;
+  LQuery := TFDQuery.Create(nil);
+  LItemQuery := TFDQuery.Create(nil);
+  try
+    LConnection.StartTransaction;
+    try
+      LQuery.Connection := LConnection;
+      LItemQuery.Connection := LConnection;
+
+      LQuery.SQL.Text := 'SELECT status FROM erp_quotes WHERE id = :id FOR UPDATE';
+      LQuery.ParamByName('id').AsLargeInt := AId;
+      LQuery.Open;
+      if LQuery.IsEmpty then
+      begin
+        LConnection.Rollback;
+        Exit(False);
+      end;
+      LStatus := UpperCase(LQuery.FieldByName('status').AsString);
+      LQuery.Close;
+
+      if IsStatusIn(LStatus, ['CONVERTED', 'CANCELED']) then
+        raise Exception.Create('Orcamento convertido ou cancelado nao pode ser alterado.');
+
+      ValidateClientActive(LQuery, AInput.ClientId);
+
+      LQuery.SQL.Text := 'DELETE FROM erp_quote_items WHERE quote_id = :quote_id';
+      LQuery.ParamByName('quote_id').AsLargeInt := AId;
+      LQuery.ExecSQL;
+
+      LLineNo := 1;
+      LTotal := 0;
+      for I := 0 to High(AInput.Items) do
+      begin
+        if AInput.Items[I].ProductId <= 0 then
+          raise Exception.CreateFmt('Item %d com produto invalido.', [I + 1]);
+        if AInput.Items[I].Quantity <= 0 then
+          raise Exception.CreateFmt('Item %d com quantidade invalida.', [I + 1]);
+
+        LItemQuery.SQL.Text := 'SELECT unit_price FROM erp_products WHERE id = :product_id AND is_active = TRUE';
+        LItemQuery.ParamByName('product_id').AsLargeInt := AInput.Items[I].ProductId;
+        LItemQuery.Open;
+        if LItemQuery.IsEmpty then
+          raise Exception.CreateFmt('Produto %d nao encontrado ou inativo.', [AInput.Items[I].ProductId]);
+        LUnitPrice := LItemQuery.FieldByName('unit_price').AsFloat;
+        LItemQuery.Close;
+
+        LLineTotal := LUnitPrice * AInput.Items[I].Quantity;
+        LTotal := LTotal + LLineTotal;
+
+        LQuery.SQL.Text :=
+          'INSERT INTO erp_quote_items (quote_id, line_no, product_id, quantity, unit_price, line_total) ' +
+          'VALUES (:quote_id, :line_no, :product_id, :quantity, :unit_price, :line_total)';
+        LQuery.ParamByName('quote_id').AsLargeInt := AId;
+        LQuery.ParamByName('line_no').AsInteger := LLineNo;
+        LQuery.ParamByName('product_id').AsLargeInt := AInput.Items[I].ProductId;
+        LQuery.ParamByName('quantity').AsFloat := AInput.Items[I].Quantity;
+        LQuery.ParamByName('unit_price').AsFloat := LUnitPrice;
+        LQuery.ParamByName('line_total').AsFloat := LLineTotal;
+        LQuery.ExecSQL;
+        Inc(LLineNo);
+      end;
+
+      LQuery.SQL.Text :=
+        'UPDATE erp_quotes ' +
+        'SET client_id = :client_id, notes = :notes, total_amount = :total_amount, updated_at = NOW() ' +
+        'WHERE id = :id';
+      LQuery.ParamByName('client_id').AsLargeInt := AInput.ClientId;
+      LQuery.ParamByName('notes').AsString := Trim(AInput.Notes);
+      LQuery.ParamByName('total_amount').AsFloat := LTotal;
+      LQuery.ParamByName('id').AsLargeInt := AId;
+      LQuery.ExecSQL;
+
+      LogQuoteStatus(
+        LQuery,
+        AId,
+        LStatus,
+        LStatus,
+        'UPDATED',
+        'Orcamento atualizado.',
+        AInput.UpdatedByUserId
+      );
+
+      LConnection.Commit;
+      Result := True;
+    except
+      LConnection.Rollback;
+      raise;
+    end;
+  finally
+    LItemQuery.Free;
+    LQuery.Free;
+    LConnection.Free;
+  end;
+end;
+
+class function TQuoteService.ApproveQuote(const AId: Int64; const AUserId: Int64): Boolean;
 var
   LConnection: TFDConnection;
   LQuery: TFDQuery;
@@ -419,6 +641,16 @@ begin
       LQuery.SQL.Text := 'UPDATE erp_quotes SET status = ''APPROVED'', approved_at = NOW(), rejected_at = NULL, updated_at = NOW() WHERE id = :id';
       LQuery.ParamByName('id').AsLargeInt := AId;
       LQuery.ExecSQL;
+      LogQuoteStatus(
+        LQuery,
+        AId,
+        LStatus,
+        'APPROVED',
+        'APPROVED',
+        'Orcamento aprovado.',
+        AUserId
+      );
+
       LConnection.Commit;
       Result := True;
     except
@@ -431,7 +663,7 @@ begin
   end;
 end;
 
-class function TQuoteService.RejectQuote(const AId: Int64): Boolean;
+class function TQuoteService.RejectQuote(const AId: Int64; const AUserId: Int64): Boolean;
 var
   LConnection: TFDConnection;
   LQuery: TFDQuery;
@@ -461,6 +693,16 @@ begin
       LQuery.SQL.Text := 'UPDATE erp_quotes SET status = ''REJECTED'', rejected_at = NOW(), approved_at = NULL, updated_at = NOW() WHERE id = :id';
       LQuery.ParamByName('id').AsLargeInt := AId;
       LQuery.ExecSQL;
+      LogQuoteStatus(
+        LQuery,
+        AId,
+        LStatus,
+        'REJECTED',
+        'REJECTED',
+        'Orcamento reprovado.',
+        AUserId
+      );
+
       LConnection.Commit;
       Result := True;
     except
@@ -473,7 +715,7 @@ begin
   end;
 end;
 
-class function TQuoteService.CancelQuote(const AId: Int64): Boolean;
+class function TQuoteService.CancelQuote(const AId: Int64; const AUserId: Int64): Boolean;
 var
   LConnection: TFDConnection;
   LQuery: TFDQuery;
@@ -506,6 +748,16 @@ begin
       LQuery.SQL.Text := 'UPDATE erp_quotes SET status = ''CANCELED'', canceled_at = NOW(), updated_at = NOW() WHERE id = :id';
       LQuery.ParamByName('id').AsLargeInt := AId;
       LQuery.ExecSQL;
+      LogQuoteStatus(
+        LQuery,
+        AId,
+        LStatus,
+        'CANCELED',
+        'CANCELED',
+        'Orcamento cancelado.',
+        AUserId
+      );
+
       LConnection.Commit;
       Result := True;
     except
@@ -518,7 +770,7 @@ begin
   end;
 end;
 
-class function TQuoteService.ConvertQuoteToOrder(const AId: Int64): Int64;
+class function TQuoteService.ConvertQuoteToOrder(const AId: Int64; const AUserId: Int64): Int64;
 var
   LConnection: TFDConnection;
   LQuery: TFDQuery;
@@ -617,6 +869,16 @@ begin
       LQuery.ParamByName('order_id').AsLargeInt := LOrderId;
       LQuery.ParamByName('id').AsLargeInt := AId;
       LQuery.ExecSQL;
+
+      LogQuoteStatus(
+        LQuery,
+        AId,
+        LQuoteStatus,
+        'CONVERTED',
+        'CONVERTED',
+        'Orcamento convertido em pedido.',
+        AUserId
+      );
 
       LConnection.Commit;
       Result := LOrderId;
