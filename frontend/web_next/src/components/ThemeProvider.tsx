@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 type ThemeMode = "dark" | "light";
 
@@ -20,7 +20,28 @@ export function ThemeProvider({
   initialTheme: ThemeMode;
   children: ReactNode;
 }) {
-  const [theme, setTheme] = useState<ThemeMode>(initialTheme);
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    if (typeof document !== "undefined") {
+      const domTheme = document.documentElement.dataset.theme;
+      if (domTheme === "light" || domTheme === "dark") return domTheme;
+    }
+    return initialTheme;
+  });
+  const didInitFromStorage = useRef(false);
+
+  useEffect(() => {
+    if (didInitFromStorage.current) return;
+    didInitFromStorage.current = true;
+    if (typeof window === "undefined") return;
+    try {
+      const saved = window.localStorage.getItem("erp-theme");
+      if (saved === "light" || saved === "dark") {
+        setTheme((prev) => (prev === saved ? prev : saved));
+      }
+    } catch {
+      // noop
+    }
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

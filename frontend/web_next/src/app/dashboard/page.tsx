@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -284,41 +284,35 @@ export default function DashboardPage() {
       ) : error ? (
         <div className="rounded-md border border-[#7f1d1d] bg-[#2d1518] p-6 text-[#fca5a5]">{error}</div>
       ) : (
-        <div className="grid h-full min-h-0 w-full grid-rows-[auto_auto_minmax(0,1fr)_minmax(0,1fr)] gap-2">
+        <div className="grid h-full min-h-0 w-full grid-rows-[auto_auto_minmax(260px,1fr)_minmax(220px,1fr)] gap-2">
           <div className={`flex flex-wrap items-center justify-between gap-2 border-b px-3 pb-2 ${gridLine}`}>
-            <div className="flex items-center gap-3">
+            <div>
               <h1 className={`text-[24px] font-semibold leading-none ${textMain}`}>Dashboard</h1>
-              <span className={`text-[12px] ${textSub}`}>Visao geral do negocio</span>
+              <p className={`mt-1 text-[12px] ${textSub}`}>Visao geral do negocio</p>
             </div>
             <button
-              className={`h-10 rounded-md border px-3 text-[14px] font-medium transition disabled:opacity-60 ${
-                isLight
-                  ? "border-[#b0bcce] bg-[#eef1f7] text-[#0f172a] hover:border-[#94a3b8] hover:bg-[#e2e8f0]"
-                  : "border-[#3a4260] bg-[#1e2332] text-[#e2e8f0] hover:border-[#4b556d] hover:bg-[#242a3b]"
-              }`}
+              className="erp-btn erp-btn-secondary"
               disabled={refreshing}
               onClick={() => void loadDashboard(period, true)}
               type="button"
             >
-              {refreshing ? "Atualizando..." : "↻ Atualizar"}
+              {refreshing ? "Atualizando..." : "Atualizar"}
             </button>
           </div>
 
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             {[
-              ["FATURAMENTO HOJE", brlNoCents(todayRevenue), "▲ 8,4% vs. ontem", "bg-[#3b82f6]"],
-              ["FATURAMENTO MES", brlNoCents(totalRevenue), "▲ 12,1% vs. mes anterior", "bg-[#22c55e]"],
-              ["TICKET MEDIO", brlTicket(ticketMedio), "▼ 2,3% vs. mes anterior", "bg-[#f59e0b]"],
+              ["FATURAMENTO HOJE", brlNoCents(todayRevenue), "â–² 8,4% vs. ontem", "bg-[#3b82f6]"],
+              ["FATURAMENTO MES", brlNoCents(totalRevenue), "â–² 12,1% vs. mes anterior", "bg-[#22c55e]"],
+              ["TICKET MEDIO", brlTicket(ticketMedio), "â–¼ 2,3% vs. mes anterior", "bg-[#f59e0b]"],
               ["NF COM ERRO", String(nfErro), "Requer atencao imediata", "bg-[#ef4444]"],
             ].map((card, idx) => (
               <article
-                className={`group relative flex min-h-[118px] flex-col items-start justify-between overflow-hidden rounded-md border px-4 py-2.5 text-left transition-all duration-200 ease-out hover:-translate-y-[1px] ${
-                  panelClass
-                } ${kpiReady ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"}`}
+                className={`erp-kpi-card flex min-h-[118px] flex-col items-start justify-between text-left transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[#3a4260] hover:shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${kpiReady ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"}`}
                 key={String(card[0])}
                 style={{ transitionDelay: `${idx * 60}ms` }}
               >
-                <div className={`absolute inset-x-0 top-0 h-[2px] ${card[3]}`} />
+                <div className={`erp-kpi-line ${card[3]}`} />
                 <p className="font-mono text-xs font-semibold uppercase tracking-wider text-[#475569]">{card[0]}</p>
                 <h2 className={`mt-1 font-mono text-[30px] font-bold leading-none ${textMain}`}>{card[1]}</h2>
                 <p className="mt-1.5 text-[11px] text-[#64748b]">{card[2]}</p>
@@ -327,9 +321,9 @@ export default function DashboardPage() {
           </div>
 
           <div className="grid min-h-0 grid-cols-1 gap-2 xl:grid-cols-12">
-            <section className={`min-w-0 rounded-md border xl:col-span-8 flex flex-col ${panelClass}`}>
+            <section className={`min-w-0 rounded-md border xl:col-span-8 flex h-full flex-col ${panelClass}`}>
               <header className={`flex items-center border-b px-4 py-1.5 text-[16px] font-semibold ${panelHeadClass}`}>
-                Vendas por periodo
+                Vendas por período
               </header>
               <div className="min-h-0 flex-1 p-2.5">
                 <div className="grid h-full min-h-[220px] grid-cols-[34px_1fr] gap-2">
@@ -360,8 +354,8 @@ export default function DashboardPage() {
               </div>
             </section>
 
-            <section className={`min-w-0 rounded-md border xl:col-span-4 flex flex-col ${panelClass}`}>
-              <header className={`flex items-center border-b px-4 py-1.5 text-[16px] font-semibold ${panelHeadClass}`}>Ultimas vendas</header>
+            <section className={`min-w-0 rounded-md border xl:col-span-4 flex h-full flex-col ${panelClass}`}>
+              <header className={`flex items-center border-b px-4 py-1.5 text-[16px] font-semibold ${panelHeadClass}`}>Últimas vendas</header>
               <table className="w-full border-collapse">
                 <thead>
                   <tr className={`border-b text-left font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b] ${gridLine}`}>
@@ -384,7 +378,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="grid min-h-0 grid-cols-1 gap-2 xl:grid-cols-12">
-            <section className={`min-w-0 rounded-md border xl:col-span-4 flex flex-col ${panelClass}`}>
+            <section className={`min-w-0 rounded-md border xl:col-span-4 flex h-full flex-col ${panelClass}`}>
               <header className={`flex items-center border-b px-4 py-1.5 text-[16px] font-semibold ${panelHeadClass}`}>Top produtos vendidos</header>
               <div className="space-y-2 p-3">
                 {topProducts.map((item) => (
@@ -400,8 +394,8 @@ export default function DashboardPage() {
               </div>
             </section>
 
-            <section className={`min-w-0 rounded-md border xl:col-span-4 flex flex-col ${panelClass}`}>
-              <header className={`flex items-center border-b px-4 py-1.5 text-[16px] font-semibold ${panelHeadClass}`}>Estoque critico</header>
+            <section className={`min-w-0 rounded-md border xl:col-span-4 flex h-full flex-col ${panelClass}`}>
+              <header className={`flex items-center border-b px-4 py-1.5 text-[16px] font-semibold ${panelHeadClass}`}>Estoque crítico</header>
               <div className="p-3">
                 {stockCritical.map((item) => (
                   <div className={`flex items-center gap-2 border-b py-1.5 last:border-none ${gridLine}`} key={item.name}>
@@ -411,15 +405,15 @@ export default function DashboardPage() {
                   </div>
                 ))}
               </div>
-              <footer className={`mt-auto border-t px-4 py-1.5 font-mono text-[11px] text-[#475569] ${gridLine}`}>Min. estoque configurado em Produtos →</footer>
+              <footer className={`mt-auto border-t px-4 py-1.5 font-mono text-[11px] text-[#475569] ${gridLine}`}>Mín. estoque configurado em Produtos →</footer>
             </section>
 
-            <section className={`min-w-0 rounded-md border xl:col-span-4 flex flex-col ${panelClass}`}>
+            <section className={`min-w-0 rounded-md border xl:col-span-4 flex h-full flex-col ${panelClass}`}>
               <header className={`flex items-center border-b px-4 py-1.5 text-[16px] font-semibold ${panelHeadClass}`}>Notas fiscais</header>
               <table className="w-full border-collapse">
                 <thead>
                   <tr className={`border-b text-left font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b] ${gridLine}`}>
-                    <th className="px-3 py-2">Nº</th><th className="px-3 py-2">Destinatario</th><th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2">Nº</th><th className="px-3 py-2">Destinatário</th><th className="px-3 py-2">Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -432,7 +426,7 @@ export default function DashboardPage() {
                   ))}
                 </tbody>
               </table>
-              <footer className="mt-auto px-4 py-1.5 font-mono text-[11px] text-[#475569]">Ver modulo fiscal →</footer>
+              <footer className="mt-auto px-4 py-1.5 font-mono text-[11px] text-[#475569]">Ver módulo fiscal →</footer>
             </section>
           </div>
         </div>
@@ -440,3 +434,4 @@ export default function DashboardPage() {
     </ErpShell>
   );
 }
+

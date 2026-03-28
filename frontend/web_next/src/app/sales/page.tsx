@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { ErpShell } from "@/components/ErpShell";
 import { useThemeMode } from "@/components/ThemeProvider";
 import { clearSession, getAccessToken, getUserIdentity } from "@/lib/session";
@@ -11,7 +12,6 @@ import {
   QuoteDetail,
   QuoteHistoryItem,
   ClientApiItem,
-  FiscalDocument,
   OrderDetail,
   OrderListItem,
   Product,
@@ -60,6 +60,19 @@ type SavedFilters = {
   maxAmount: string;
 };
 const PAGE_SIZE = 8;
+const INITIAL_PAGE_SIZE = 80;
+const INITIAL_CATALOG_PAGE_SIZE = 120;
+const ACTIVE_CLIENTS_QUERY_KEY = ["catalog", "clients", "active"] as const;
+const ACTIVE_PRODUCTS_QUERY_KEY = ["catalog", "products", "active"] as const;
+
+function getSafeStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 function brl(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value || 0);
@@ -187,6 +200,7 @@ function canOrderAction(statusRaw: string, action: "confirm" | "invoice" | "emit
 
 export default function SalesPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { isLight } = useThemeMode();
   const user = getUserIdentity();
   const userKey = user.login?.trim().toLowerCase() || "default";
@@ -202,7 +216,9 @@ export default function SalesPage() {
   const [quotes, setQuotes] = useState<QuoteListItem[]>([]);
   const [clients, setClients] = useState<ClientApiItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [fiscalByOrder, setFiscalByOrder] = useState<Record<number, FiscalDocument | null>>({});
+  const [fiscalByOrder, setFiscalByOrder] = useState<Record<number, { document_type: string; number: string; issued_at: string; created_at: string } | null>>({});
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
+  const [catalogLoading, setCatalogLoading] = useState(false);
 
   const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
@@ -439,34 +455,60 @@ export default function SalesPage() {
     reportWindow.focus();
   }
 
+  async function loadCatalogData(token: string, force = false) {
+    if (!force && (catalogLoading || catalogLoaded)) return;
+    setCatalogLoading(true);
+    try {
+      const [clientResponse, productResponse] = await Promise.all([
+        queryClient.fetchQuery({
+          queryKey: [...ACTIVE_CLIENTS_QUERY_KEY, token],
+          queryFn: () =>
+            listClientsRequest(token, {
+              page: 1,
+              pageSize: INITIAL_CATALOG_PAGE_SIZE,
+              sortBy: "name",
+              sortDir: "asc",
+              isActive: "true",
+            }),
+          staleTime: 90_000,
+        }),
+        queryClient.fetchQuery({
+          queryKey: [...ACTIVE_PRODUCTS_QUERY_KEY, token],
+          queryFn: () =>
+            listProductsRequest(token, {
+              page: 1,
+              pageSize: INITIAL_CATALOG_PAGE_SIZE,
+              sortBy: "name",
+              sortDir: "asc",
+              isActive: "true",
+            }),
+          staleTime: 90_000,
+        }),
+      ]);
+      setClients(clientResponse.items);
+      setProducts(productResponse.items);
+      setCatalogLoaded(true);
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
   async function loadData(token: string) {
-    const [orderResponse, quoteResponse, clientResponse, productResponse] = await Promise.all([
-      listOrdersRequest(token, { page: 1, pageSize: 300, sortBy: "id", sortDir: "desc" }),
-      listQuotesRequest(token, { page: 1, pageSize: 300, sortBy: "id", sortDir: "desc" }),
-      listClientsRequest(token, { page: 1, pageSize: 400, sortBy: "name", sortDir: "asc", isActive: "true" }),
-      listProductsRequest(token, { page: 1, pageSize: 500, sortBy: "name", sortDir: "asc", isActive: "true" }),
+    const [orderResponse, quoteResponse] = await Promise.all([
+      listOrdersRequest(token, { page: 1, pageSize: INITIAL_PAGE_SIZE, sortBy: "id", sortDir: "desc" }),
+      listQuotesRequest(token, { page: 1, pageSize: INITIAL_PAGE_SIZE, sortBy: "id", sortDir: "desc" }),
     ]);
     setOrders(orderResponse.items);
     setQuotes(quoteResponse.items);
-    setClients(clientResponse.items);
-    setProducts(productResponse.items);
+    setFiscalByOrder({});
 
-    const docs = await Promise.all(
-      orderResponse.items.map(async (order) => {
-        try {
-          const doc = await getOrderFiscalRequest(token, order.id);
-          return [order.id, doc] as const;
-        } catch {
-          return [order.id, null] as const;
-        }
-      }),
-    );
-
-    const map: Record<number, FiscalDocument | null> = {};
-    docs.forEach(([id, doc]) => {
-      map[id] = doc;
+    // Segunda fase: carregar catálogos sem bloquear a abertura da tela.
+    void loadCatalogData(token, false).catch((requestError) => {
+      const message = requestError instanceof Error ? requestError.message : "Falha ao carregar catálogos.";
+      if (message !== "unauthorized") {
+        toast("Catálogos em carregamento parcial. A tela segue disponível.", "error");
+      }
     });
-    setFiscalByOrder(map);
   }
 
   useEffect(() => {
@@ -500,7 +542,7 @@ export default function SalesPage() {
     return () => {
       cancel = true;
     };
-  }, [router, reload]);
+  }, [router, reload, queryClient]);
 
   useEffect(() => {
     if (loading) return;
@@ -510,8 +552,10 @@ export default function SalesPage() {
   }, [loading, orders.length, quotes.length, tab]);
 
   useEffect(() => {
+    const storage = getSafeStorage();
+    if (!storage) return;
     try {
-      const raw = localStorage.getItem(`erp_sales_filters_${userKey}`);
+      const raw = storage.getItem(`erp_sales_filters_${userKey}`);
       if (!raw) return;
       const parsed = JSON.parse(raw) as Partial<SavedFilters>;
       if (parsed.tab === "orders" || parsed.tab === "quotes") setTab(parsed.tab);
@@ -535,6 +579,8 @@ export default function SalesPage() {
   }, [userKey]);
 
   useEffect(() => {
+    const storage = getSafeStorage();
+    if (!storage) return;
     const payload: SavedFilters = {
       tab,
       queryInput,
@@ -549,7 +595,7 @@ export default function SalesPage() {
       minAmount,
       maxAmount,
     };
-    localStorage.setItem(`erp_sales_filters_${userKey}`, JSON.stringify(payload));
+    storage.setItem(`erp_sales_filters_${userKey}`, JSON.stringify(payload));
   }, [
     userKey,
     tab,
@@ -567,8 +613,10 @@ export default function SalesPage() {
   ]);
 
   useEffect(() => {
+    const storage = getSafeStorage();
+    if (!storage) return;
     try {
-      const raw = localStorage.getItem(`erp_sales_detail_meta_${userKey}`);
+      const raw = storage.getItem(`erp_sales_detail_meta_${userKey}`);
       if (!raw) return;
       const parsed = JSON.parse(raw) as {
         attachments?: Record<string, DetailAttachment[]>;
@@ -582,7 +630,9 @@ export default function SalesPage() {
   }, [userKey]);
 
   useEffect(() => {
-    localStorage.setItem(
+    const storage = getSafeStorage();
+    if (!storage) return;
+    storage.setItem(
       `erp_sales_detail_meta_${userKey}`,
       JSON.stringify({
         attachments: detailAttachments,
@@ -609,7 +659,9 @@ export default function SalesPage() {
     const toDateValue = dateTo ? new Date(`${dateTo}T23:59:59`) : null;
     const base = orders.filter((order) => {
       const status = order.status.toUpperCase();
-      const hasFiscal = !!fiscalByOrder[order.id];
+      const hasFiscal = Object.prototype.hasOwnProperty.call(fiscalByOrder, order.id)
+        ? !!fiscalByOrder[order.id]
+        : Boolean(order.invoice_number);
       const orderDate = parseDateValue(order.created_at);
 
       if (orderStatusFilter === "open" && !status.includes("OPEN")) return false;
@@ -723,19 +775,50 @@ export default function SalesPage() {
     dateTo,
   ]);
 
-  const pageItems = useMemo(() => {
-    if (totalPages <= 1) return [1];
-    const out: Array<number | "..."> = [];
-    const push = (value: number | "...") => {
-      if (out[out.length - 1] !== value) out.push(value);
+  useEffect(() => {
+    if (tab !== "orders") return;
+    const token = getAccessToken();
+    if (!token) return;
+    const currentRows = rows as OrderListItem[];
+    const missingIds = currentRows
+      .map((order) => order.id)
+      .filter((id) => !Object.prototype.hasOwnProperty.call(fiscalByOrder, id));
+    if (missingIds.length === 0) return;
+
+    let canceled = false;
+    Promise.all(
+      missingIds.map(async (id) => {
+        try {
+          const doc = await getOrderFiscalRequest(token, id);
+          const safeDoc = doc as NonNullable<typeof doc>;
+          return [
+            id,
+            {
+              document_type: safeDoc.document_type,
+              number: safeDoc.number || "",
+              issued_at: safeDoc.issued_at || "",
+              created_at: safeDoc.created_at || "",
+            },
+          ] as const;
+        } catch {
+          return [id, null] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (canceled) return;
+      setFiscalByOrder((current) => {
+        const next = { ...current };
+        entries.forEach(([id, doc]) => {
+          next[id] = doc;
+        });
+        return next;
+      });
+    });
+
+    return () => {
+      canceled = true;
     };
-    push(1);
-    if (currentPage > 3) push("...");
-    for (let p = Math.max(2, currentPage - 1); p <= Math.min(totalPages - 1, currentPage + 1); p += 1) push(p);
-    if (currentPage < totalPages - 2) push("...");
-    if (totalPages > 1) push(totalPages);
-    return out;
-  }, [currentPage, totalPages]);
+  }, [tab, rows, fiscalByOrder]);
 
   const orderKpi = useMemo(() => {
     const total = orders.length;
@@ -766,7 +849,11 @@ export default function SalesPage() {
   );
 
   const currentOrderStatus = (currentOrderListItem?.status || "").toUpperCase();
-  const currentOrderHasFiscal = detail ? !!fiscalByOrder[detail.id] : false;
+  const currentOrderHasFiscal = detail
+    ? (Object.prototype.hasOwnProperty.call(fiscalByOrder, detail.id)
+        ? !!fiscalByOrder[detail.id]
+        : Boolean(currentOrderListItem?.invoice_number))
+    : false;
 
   const orderTimeline = useMemo(() => {
     if (!detail) return [];
@@ -849,12 +936,22 @@ export default function SalesPage() {
     if (successMessage) toast(successMessage, "success");
   }
 
-  function openCreate(mode: CreateMode) {
+  async function openCreate(mode: CreateMode) {
     setCreateMode(mode);
     setEditingQuoteId(null);
     setCreateClientId("");
     setCreateItems([{ id: 1, productId: "", qty: "1" }]);
     setCreateOpen(true);
+    if (clients.length === 0 || products.length === 0) {
+      const token = getAccessToken();
+      if (token) {
+        try {
+          await loadCatalogData(token, true);
+        } catch {
+          // O modal abre mesmo com catálogo parcial; usuário pode atualizar em seguida.
+        }
+      }
+    }
   }
 
   function addCreateItem() {
@@ -1155,15 +1252,15 @@ export default function SalesPage() {
         <section className="rounded-md border border-[#7f1d1d] bg-[#2d1518] p-6 text-center text-[#fca5a5]">{error}</section>
       ) : (
         <div className="space-y-3">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-[#2a3045] px-3 pb-2">
+          <div className="erp-page-header">
             <div className="flex items-center gap-3">
-              <h1 className="text-[24px] font-semibold leading-none text-[#e2e8f0]">Vendas / Comercial</h1>
-              <span className="text-[12px] text-[#64748b]">Orcamentos, pedidos, faturamento e fiscal</span>
+              <h1 className="erp-page-title">Vendas / Comercial</h1>
+              <span className="erp-page-subtitle">Orcamentos, pedidos, faturamento e fiscal</span>
             </div>
-            <div className="flex items-center gap-2">
-              <button className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-4 text-[13px] font-medium text-[#e2e8f0] transition hover:border-[#3a4260]" onClick={() => refreshData("Dados comerciais atualizados.")} type="button">Atualizar</button>
-              <button className="h-10 flex items-center gap-2 rounded border border-[#2a3045] bg-[#1e2332] px-4 text-[13px] font-medium text-[#e2e8f0] transition hover:border-[#3a4260]" onClick={() => openCreate("quote")} type="button"><span className="material-symbols-outlined !text-[18px]">request_quote</span>Novo orcamento</button>
-              <button className="h-10 flex items-center gap-2 rounded border border-[#1d4ed8] bg-[#2563eb] px-5 text-[13px] font-semibold text-white hover:bg-[#1d4ed8]" onClick={() => openCreate("order")} type="button"><span className="material-symbols-outlined !text-[18px]">add</span>Nova venda</button>
+            <div className="erp-pagination-nav">
+              <button className="erp-btn erp-btn-secondary" onClick={() => refreshData("Dados comerciais atualizados.")} type="button">Atualizar</button>
+              <button className="erp-btn erp-btn-secondary" onClick={() => openCreate("quote")} type="button"><span className="erp-icon-plus">add</span>Novo orcamento</button>
+              <button className="erp-btn erp-btn-primary" onClick={() => openCreate("order")} type="button"><span className="erp-icon-plus">add</span>Nova venda</button>
             </div>
           </div>
 
@@ -1182,8 +1279,8 @@ export default function SalesPage() {
                   { t: "CONVERSAO", v: `${quoteKpi.conversionRate.toFixed(1)}%`, s: "Taxa de conversao em pedido", c: "bg-[#ef4444]", d: "180ms" },
                 ]
             ).map((card) => (
-              <article className={`group relative flex min-h-[118px] flex-col items-start justify-between overflow-hidden rounded-md border border-[#2a3045] bg-[#161a24] px-4 py-2.5 text-left transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[#3a4260] hover:shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${kpiReady ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"}`} key={card.t} style={{ transitionDelay: card.d }}>
-                <div className={`absolute inset-x-0 top-0 h-[2px] ${card.c}`} />
+              <article className={`erp-kpi-card flex min-h-[118px] flex-col items-start justify-between text-left transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[#3a4260] hover:shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${kpiReady ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"}`} key={card.t} style={{ transitionDelay: card.d }}>
+                <div className={`erp-kpi-line ${card.c}`} />
                 <p className="font-mono text-xs font-semibold uppercase tracking-wider text-[#475569]">{card.t}</p>
                 <h3 className="mt-1.5 font-mono text-3xl font-bold leading-none text-[#e2e8f0]">{card.v}</h3>
                 <p className="text-[11px] text-[#64748b]">{card.s}</p>
@@ -1198,15 +1295,15 @@ export default function SalesPage() {
                 <button className={`h-8 border-l px-3 text-[12px] ${isLight ? "border-[#b0bcce]" : "border-[#2a3045]"} ${tab === "quotes" ? (isLight ? "bg-[#dbeafe] text-[#0f172a]" : "bg-[#1e3a5f] text-[#e2e8f0]") : (isLight ? "bg-[#ffffff] text-[#475569] hover:text-[#0f172a]" : "bg-[#161a24] text-[#94a3b8] hover:text-[#e2e8f0]")}`} onClick={() => setTab("quotes")} type="button">Orcamentos</button>
               </div>
 
-              <div className="relative min-w-[220px] flex-1">
-                <input className="h-9 w-full rounded border border-[#2a3045] bg-[#161a24] px-3 pr-10 text-[13px] text-[#e2e8f0] placeholder:text-[#64748b] outline-none focus:border-[#3b82f6]" onChange={(event) => setQueryInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && setQuery(queryInput.trim())} placeholder={tab === "orders" ? "Buscar pedido, cliente ou status..." : "Buscar orcamento, cliente ou status..."} value={queryInput} />
-                <button className="absolute inset-y-0 right-1.5 my-auto inline-flex h-7 w-7 items-center justify-center rounded text-[#64748b] transition hover:text-[#e2e8f0]" onClick={() => setQuery(queryInput.trim())} type="button"><span className="material-symbols-outlined !text-[18px]">search</span></button>
+              <div className="erp-list-search-wrap min-w-[220px]">
+                <input className="erp-list-search-input" onChange={(event) => setQueryInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && setQuery(queryInput.trim())} placeholder={tab === "orders" ? "Buscar pedido, cliente ou status..." : "Buscar orcamento, cliente ou status..."} value={queryInput} />
+                <button className="erp-list-search-btn" onClick={() => setQuery(queryInput.trim())} type="button"><span className="material-symbols-outlined !text-[18px]">search</span></button>
               </div>
 
-              <button className={`inline-flex h-9 items-center gap-1.5 rounded border px-3 text-[13px] transition ${showFilters ? "border-[#3b82f6] bg-[#1e3a5f] text-[#e2e8f0]" : "border-[#2a3045] bg-[#161a24] text-[#94a3b8] hover:border-[#3a4260] hover:text-[#e2e8f0]"}`} onClick={() => setShowFilters((s) => !s)} type="button"><span className="material-symbols-outlined !text-[17px]">filter_alt</span>Filtros</button>
+              <button className={`erp-filter-btn ${showFilters ? "erp-filter-btn-on" : "erp-filter-btn-off"}`} onClick={() => setShowFilters((s) => !s)} type="button"><span className="material-symbols-outlined !text-[17px]">filter_alt</span>Filtros</button>
 
-              <span className="ml-auto font-mono text-[11px] uppercase tracking-[0.16em] text-[#64748b]">Ordenar por:</span>
-              <select className="h-9 rounded border border-[#2a3045] bg-[#161a24] px-3 text-[13px] text-[#e2e8f0] outline-none focus:border-[#3b82f6]" onChange={(event) => setSortBy(event.target.value as SortBy)} value={sortBy}>
+              <span className="erp-sort-label">Ordenar por:</span>
+              <select className="erp-list-sort-select outline-none focus:border-[#3b82f6]" onChange={(event) => setSortBy(event.target.value as SortBy)} value={sortBy}>
                 <option value="recent">Mais recente</option><option value="amount_desc">Maior valor</option><option value="amount_asc">Menor valor</option><option value="name_asc">Nome A-Z</option><option value="name_desc">Nome Z-A</option>
               </select>
             </div>
@@ -1257,7 +1354,7 @@ export default function SalesPage() {
                 </label>
                 <div className="col-span-full flex items-end justify-between gap-2 pt-1">
                   <span className="font-mono text-[11px] text-[#64748b]">Filtros salvos automaticamente para o usuario: {user.login || "padrao"}</span>
-                  <button className="h-8 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[12px] text-[#94a3b8] transition hover:border-[#3a4260] hover:text-[#e2e8f0]" onClick={() => { setOrderStatusFilter("all"); setQuoteStatusFilter("all"); setFiscalFilter("all"); setEmissionDate(""); setDateFrom(""); setDateTo(""); setClientFilter(""); setMinAmount(""); setMaxAmount(""); setQueryInput(""); setQuery(""); }} type="button">Limpar filtros</button>
+                  <button className="erp-list-action-btn h-8 px-3 text-[12px]" onClick={() => { setOrderStatusFilter("all"); setQuoteStatusFilter("all"); setFiscalFilter("all"); setEmissionDate(""); setDateFrom(""); setDateTo(""); setClientFilter(""); setMinAmount(""); setMaxAmount(""); setQueryInput(""); setQuery(""); }} type="button">Limpar filtros</button>
                 </div>
               </div>
             ) : null}
@@ -1266,20 +1363,30 @@ export default function SalesPage() {
               <>
                 <div className="grid grid-cols-[1fr_2fr_1fr_1fr_1fr_1fr_1.6fr] border-b border-[#2a3045] bg-[#1e2332] px-4 py-3 font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b]"><span>Pedido</span><span>Cliente</span><span>Data</span><span>Status</span><span>Valor</span><span>Fiscal</span><span className="text-right">Acoes</span></div>
                 {(rows as OrderListItem[]).map((order) => {
-                  const fiscal = fiscalByOrder[order.id];
+                  const fiscal = Object.prototype.hasOwnProperty.call(fiscalByOrder, order.id)
+                    ? fiscalByOrder[order.id]
+                    : null;
+                  const hasFiscal = fiscal ? true : Boolean(order.invoice_number);
+                  const fiscalLabel = fiscal
+                    ? fiscal.document_type === "NFCE"
+                      ? "NFC-e"
+                      : "NF-e"
+                    : hasFiscal
+                      ? "Fiscal"
+                      : "Sem fiscal";
                   return (
                     <div className="grid cursor-pointer grid-cols-[1fr_2fr_1fr_1fr_1fr_1fr_1.6fr] items-center border-b border-[#2a3045] px-4 py-3 text-left transition hover:bg-[#1e2332]" key={order.id} onClick={() => openDetail(order.id)}>
                       <div><p className="font-mono text-[13px] font-bold text-[#3b82f6]">#PED-{String(order.id).padStart(6, "0")}</p><p className="font-mono text-[10px] text-[#64748b]">{order.items_count} itens</p></div>
                       <div><p className="text-[14px] font-semibold text-[#e2e8f0]">{order.client_name}</p><p className="font-mono text-[10px] text-[#64748b]">{order.invoice_number || "Sem faturamento"}</p></div>
                       <span className="font-mono text-[12px] text-[#94a3b8]">{dmy(order.created_at)}</span>
-                      <span><span className={`inline-flex h-5 items-center rounded-[2px] px-2 font-mono text-[10px] ${orderStatusClass(order.status)}`}>{orderStatusLabel(order.status)}</span></span>
+                      <span><span className={`erp-tag ${orderStatusClass(order.status)}`}>{orderStatusLabel(order.status)}</span></span>
                       <span className="font-mono text-[13px] text-[#e2e8f0]">{brl(order.total_amount)}</span>
-                      <span>{fiscal ? <span className="inline-flex h-5 items-center rounded-[2px] bg-[#14532d] px-2 font-mono text-[10px] text-[#86efac]">{fiscal.document_type === "NFCE" ? "NFC-e" : "NF-e"}</span> : <span className="inline-flex h-5 items-center rounded-[2px] bg-[#1e2332] px-2 font-mono text-[10px] text-[#94a3b8]">Sem fiscal</span>}</span>
+                      <span>{hasFiscal ? <span className="erp-tag erp-tag-success">{fiscalLabel}</span> : <span className="erp-tag erp-tag-neutral">Sem fiscal</span>}</span>
                       <div className="flex justify-end gap-1">
-                        <button className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#e2e8f0] hover:border-[#3a4260] hover:bg-[#253049]" disabled={busyId === order.id} onClick={(event) => { event.stopPropagation(); openDetail(order.id); }} type="button">Abrir</button>
-                        <button className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#e2e8f0] hover:border-[#3a4260] hover:bg-[#253049] disabled:opacity-40" disabled={busyId === order.id || !canOrderAction(order.status, "confirm", !!fiscal)} onClick={(event) => { event.stopPropagation(); runOrderAction(order.id, "confirm"); }} type="button">Aprovar</button>
-                        <button className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#e2e8f0] hover:border-[#3a4260] hover:bg-[#253049] disabled:opacity-40" disabled={busyId === order.id || !canOrderAction(order.status, "invoice", !!fiscal)} onClick={(event) => { event.stopPropagation(); runOrderAction(order.id, "invoice"); }} type="button">Faturar</button>
-                        <button className="h-7 rounded border border-[#166534] bg-[#14532d] px-2 text-[11px] text-[#86efac] hover:border-[#15803d] hover:bg-[#166534] disabled:opacity-40" disabled={busyId === order.id || !canOrderAction(order.status, "emit", !!fiscal)} onClick={(event) => { event.stopPropagation(); runOrderAction(order.id, "emit"); }} type="button">Emitir</button>
+                        <button className="erp-list-action-btn" disabled={busyId === order.id} onClick={(event) => { event.stopPropagation(); openDetail(order.id); }} type="button">Abrir</button>
+                        <button className="erp-list-action-btn disabled:opacity-40" disabled={busyId === order.id || !canOrderAction(order.status, "confirm", hasFiscal)} onClick={(event) => { event.stopPropagation(); runOrderAction(order.id, "confirm"); }} type="button">Aprovar</button>
+                        <button className="erp-list-action-btn disabled:opacity-40" disabled={busyId === order.id || !canOrderAction(order.status, "invoice", hasFiscal)} onClick={(event) => { event.stopPropagation(); runOrderAction(order.id, "invoice"); }} type="button">Faturar</button>
+                        <button className="erp-list-action-btn border-[#166534] bg-[#14532d] text-[#86efac] hover:border-[#15803d] hover:bg-[#166534] disabled:opacity-40" disabled={busyId === order.id || !canOrderAction(order.status, "emit", hasFiscal)} onClick={(event) => { event.stopPropagation(); runOrderAction(order.id, "emit"); }} type="button">Emitir</button>
                       </div>
                     </div>
                   );
@@ -1293,27 +1400,43 @@ export default function SalesPage() {
                     <div><p className="font-mono text-[13px] font-bold text-[#3b82f6]">{quote.code}</p><p className="font-mono text-[10px] text-[#64748b]">{quote.items_count} itens</p></div>
                     <div><p className="text-[14px] font-semibold text-[#e2e8f0]">{quote.client_name}</p><p className="font-mono text-[10px] text-[#64748b]">{quote.linked_order_id ? `Pedido #${quote.linked_order_id}` : "Sem pedido"}</p></div>
                     <span className="font-mono text-[12px] text-[#94a3b8]">{dmy(quote.created_at)}</span>
-                    <span><span className={`inline-flex h-5 items-center rounded-[2px] px-2 font-mono text-[10px] ${quoteStatusClass(quote.status)}`}>{quoteStatusLabel(quote.status)}</span></span>
+                    <span><span className={`erp-tag ${quoteStatusClass(quote.status)}`}>{quoteStatusLabel(quote.status)}</span></span>
                     <span className="font-mono text-[13px] text-[#e2e8f0]">{brl(quote.total_amount)}</span>
                     <div className="flex justify-end gap-1">
-                      <button className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#e2e8f0] hover:border-[#3a4260] hover:bg-[#253049]" disabled={busyId === quote.id} onClick={(event) => { event.stopPropagation(); openQuote(quote.id); }} type="button">Abrir</button>
-                      <button className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#e2e8f0] hover:border-[#3a4260] hover:bg-[#253049] disabled:opacity-40" disabled={busyId === quote.id || quote.status === "CONVERTED" || quote.status === "CANCELED"} onClick={(event) => { event.stopPropagation(); openEditQuote(quote); }} type="button">Editar</button>
-                      <button className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#e2e8f0] hover:border-[#3a4260] hover:bg-[#253049] disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "approve")} onClick={(event) => { event.stopPropagation(); runQuoteAction(quote.id, "approve"); }} type="button">Aprovar</button>
-                      <button className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#e2e8f0] hover:border-[#3a4260] hover:bg-[#253049] disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "reject")} onClick={(event) => { event.stopPropagation(); runQuoteAction(quote.id, "reject"); }} type="button">Reprovar</button>
-                      <button className="h-7 rounded border border-[#2a3045] bg-[#1e2332] px-2 text-[11px] text-[#e2e8f0] hover:border-[#3a4260] hover:bg-[#253049] disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "cancel")} onClick={(event) => { event.stopPropagation(); runQuoteAction(quote.id, "cancel"); }} type="button">Cancelar</button>
-                      <button className="h-7 rounded border border-[#166534] bg-[#14532d] px-2 text-[11px] text-[#86efac] hover:border-[#15803d] hover:bg-[#166534] disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "convert")} onClick={(event) => { event.stopPropagation(); convertQuoteToOrder(quote.id); }} type="button">Converter</button>
+                      <button className="erp-list-action-btn" disabled={busyId === quote.id} onClick={(event) => { event.stopPropagation(); openQuote(quote.id); }} type="button">Abrir</button>
+                      <button className="erp-list-action-btn disabled:opacity-40" disabled={busyId === quote.id || quote.status === "CONVERTED" || quote.status === "CANCELED"} onClick={(event) => { event.stopPropagation(); openEditQuote(quote); }} type="button">Editar</button>
+                      <button className="erp-list-action-btn disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "approve")} onClick={(event) => { event.stopPropagation(); runQuoteAction(quote.id, "approve"); }} type="button">Aprovar</button>
+                      <button className="erp-list-action-btn disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "reject")} onClick={(event) => { event.stopPropagation(); runQuoteAction(quote.id, "reject"); }} type="button">Reprovar</button>
+                      <button className="erp-list-action-btn disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "cancel")} onClick={(event) => { event.stopPropagation(); runQuoteAction(quote.id, "cancel"); }} type="button">Cancelar</button>
+                      <button className="erp-list-action-btn border-[#166534] bg-[#14532d] text-[#86efac] hover:border-[#15803d] hover:bg-[#166534] disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "convert")} onClick={(event) => { event.stopPropagation(); convertQuoteToOrder(quote.id); }} type="button">Converter</button>
                     </div>
                   </div>
                 ))}
               </>
             )}
 
-            <div className="flex items-center justify-between border-t border-[#2a3045] px-4 py-2 font-mono text-[12px] text-[#64748b]">
-              <span>{list.length === 0 ? "Mostrando 0-0" : `Mostrando ${startIndex + 1}-${endIndex}`}</span>
-              <div className="flex items-center gap-2">
-                <button className="px-1 transition hover:text-[#e2e8f0] disabled:opacity-40 disabled:hover:text-[#64748b]" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} type="button">←</button>
-                {pageItems.map((item, index) => item === "..." ? <span key={`dots-${index}`} className="px-0.5">...</span> : <button className={`px-1 transition ${item === currentPage ? "text-[#e2e8f0]" : "hover:text-[#e2e8f0]"}`} key={item} onClick={() => setPage(item)} type="button">{item}</button>)}
-                <button className="px-1 transition hover:text-[#e2e8f0] disabled:opacity-40 disabled:hover:text-[#64748b]" disabled={currentPage >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))} type="button">→</button>
+            <div className="erp-pagination-footer">
+              <span>{list.length === 0 ? "Mostrando 0-0" : `Mostrando ${startIndex + 1}-${endIndex} de ${list.length}`}</span>
+              <div className="erp-pagination-nav">
+                <button
+                  className="erp-list-action-btn h-7 px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
+                  disabled={currentPage <= 1}
+                  onClick={() => setPage((value) => Math.max(1, value - 1))}
+                  type="button"
+                >
+                  Anterior
+                </button>
+                <span className="text-[11px] text-[#94a3b8]">
+                  Pagina {currentPage} de {totalPages}
+                </span>
+                <button
+                  className="erp-list-action-btn h-7 px-2 text-[11px] text-[#94a3b8] disabled:opacity-40"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+                  type="button"
+                >
+                  Proxima
+                </button>
               </div>
             </div>
           </section>
