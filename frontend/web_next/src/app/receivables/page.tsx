@@ -10,9 +10,28 @@ import {
   listReceivablesRequest,
   registerReceivablePaymentRequest,
 } from "@/lib/api";
-import { clearSession, getAccessToken } from "@/lib/session";
+import { clearSession, getAccessToken, getUserIdentity } from "@/lib/session";
 
 type SortBy = "due_asc" | "due_desc" | "value_desc" | "value_asc" | "name_asc" | "name_desc";
+type SavedReceivableFilters = {
+  queryInput: string;
+  query: string;
+  status: string;
+  paymentMethodFilter: string;
+  clientIdFilter: string;
+  orderIdFilter: string;
+  sortBy: SortBy;
+  page: number;
+};
+
+function getSafeStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 function brl(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value || 0);
@@ -57,6 +76,9 @@ function statusClass(status: string) {
 
 export default function ReceivablesPage() {
   const router = useRouter();
+  const user = getUserIdentity();
+  const userKey = user.login?.trim().toLowerCase() || "default";
+  const filtersStorageKey = `erp:receivables:filters:${userKey}`;
   const [loading, setLoading] = useState(true);
   const [kpiReady, setKpiReady] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -82,6 +104,7 @@ export default function ReceivablesPage() {
   const [method, setMethod] = useState("PIX");
   const [notes, setNotes] = useState("");
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: "success" | "error" }>>([]);
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
 
   function toast(message: string, type: "success" | "error") {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -124,6 +147,63 @@ export default function ReceivablesPage() {
   }
 
   useEffect(() => {
+    const storage = getSafeStorage();
+    if (!storage) {
+      setFiltersHydrated(true);
+      return;
+    }
+    try {
+      const raw = storage.getItem(filtersStorageKey);
+      if (!raw) {
+        setFiltersHydrated(true);
+        return;
+      }
+      const parsed = JSON.parse(raw) as Partial<SavedReceivableFilters>;
+      setQueryInput(parsed.queryInput || "");
+      setQuery(parsed.query || "");
+      setStatus(parsed.status || "all");
+      setPaymentMethodFilter(parsed.paymentMethodFilter || "all");
+      setClientIdFilter(parsed.clientIdFilter || "");
+      setOrderIdFilter(parsed.orderIdFilter || "");
+      setSortBy(parsed.sortBy || "due_asc");
+      setPage(parsed.page && parsed.page > 0 ? parsed.page : 1);
+    } catch {
+      // ignora storage invalido e segue com filtros default
+    } finally {
+      setFiltersHydrated(true);
+    }
+  }, [filtersStorageKey]);
+
+  useEffect(() => {
+    if (!filtersHydrated) return;
+    const storage = getSafeStorage();
+    if (!storage) return;
+    const payload: SavedReceivableFilters = {
+      queryInput,
+      query,
+      status,
+      paymentMethodFilter,
+      clientIdFilter,
+      orderIdFilter,
+      sortBy,
+      page,
+    };
+    storage.setItem(filtersStorageKey, JSON.stringify(payload));
+  }, [
+    filtersHydrated,
+    filtersStorageKey,
+    queryInput,
+    query,
+    status,
+    paymentMethodFilter,
+    clientIdFilter,
+    orderIdFilter,
+    sortBy,
+    page,
+  ]);
+
+  useEffect(() => {
+    if (!filtersHydrated) return;
     let canceled = false;
     setLoading(true);
     load(page)
@@ -143,7 +223,7 @@ export default function ReceivablesPage() {
     return () => {
       canceled = true;
     };
-  }, [router, page, query, status, sortBy, clientIdFilter, orderIdFilter, refreshKey]);
+  }, [router, filtersHydrated, page, query, status, sortBy, clientIdFilter, orderIdFilter, refreshKey]);
 
   useEffect(() => {
     if (loading) return;
