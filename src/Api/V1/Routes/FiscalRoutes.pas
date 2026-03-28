@@ -127,8 +127,10 @@ begin
             Exit;
           end;
           LObj := TJSONObject(LBody);
+          LInput.DocumentType := LObj.GetValue<string>('document_type', '');
           LInput.Series := LObj.GetValue<string>('series', '');
           LInput.Number := LObj.GetValue<string>('number', '');
+          LInput.TotalAmount := LObj.GetValue<Double>('total_amount', 0);
         finally
           LBody.Free;
         end;
@@ -136,6 +138,51 @@ begin
 
       try
         LFiscalId := TFiscalDocumentService.EmitOrderNFe(LOrderId, LInput);
+      except
+        on E: Exception do
+        begin
+          TApiResponse.SendError(ARes, 400, 'fiscal_validation', E.Message);
+          Exit;
+        end;
+      end;
+
+      ARes.Status(201).ContentType('application/json').Send('{"status":"ok","id":' + IntToStr(LFiscalId) + '}');
+    end
+  );
+
+  THorse.Post('/api/v1/fiscal/documents/emit',
+    procedure(AReq: THorseRequest; ARes: THorseResponse)
+    var
+      LBody: TJSONValue;
+      LObj: TJSONObject;
+      LInput: TFiscalEmitDirectInput;
+      LFiscalId: Int64;
+    begin
+      if not TAuthMiddleware.AuthorizePermission(AReq, ARes, 'fiscal.documents.emit') then
+        Exit;
+
+      LBody := TJSONObject.ParseJSONValue(AReq.Body);
+      try
+        if (LBody = nil) or not (LBody is TJSONObject) then
+        begin
+          TApiResponse.SendError(ARes, 400, 'invalid_json', 'Payload JSON invalido.');
+          Exit;
+        end;
+        LObj := TJSONObject(LBody);
+        LInput := Default(TFiscalEmitDirectInput);
+        LInput.DocumentType := LObj.GetValue<string>('document_type', '');
+        LInput.Series := LObj.GetValue<string>('series', '');
+        LInput.Number := LObj.GetValue<string>('number', '');
+        LInput.ClientId := LObj.GetValue<Int64>('client_id', 0);
+        LInput.RecipientName := LObj.GetValue<string>('recipient_name', '');
+        LInput.RecipientDocument := LObj.GetValue<string>('recipient_document', '');
+        LInput.TotalAmount := LObj.GetValue<Double>('total_amount', 0);
+      finally
+        LBody.Free;
+      end;
+
+      try
+        LFiscalId := TFiscalDocumentService.EmitDirectDocument(LInput);
       except
         on E: Exception do
         begin

@@ -4,11 +4,12 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DashboardSummary,
-  OrderListItem,
+  FiscalDocument,
   dashboardSummaryRequest,
+  emitDirectFiscalRequest,
   emitOrderFiscalRequest,
   invoiceOrderRequest,
-  listOrdersRequest,
+  listFiscalDocumentsRequest,
 } from "@/lib/api";
 import { clearSession, getAccessToken } from "@/lib/session";
 import { ErpShell } from "@/components/ErpShell";
@@ -43,6 +44,20 @@ function mapFiscalStatus(status: string): string {
   return "Canc. pend.";
 }
 
+function originLabel(originType: "ORDER" | "QUOTE_ORDER" | "DIRECT" | "UNKNOWN"): string {
+  if (originType === "QUOTE_ORDER") return "Orcamento->Pedido";
+  if (originType === "ORDER") return "Pedido";
+  if (originType === "DIRECT") return "Direta";
+  return "Nao definida";
+}
+
+function originPill(originType: "ORDER" | "QUOTE_ORDER" | "DIRECT" | "UNKNOWN"): string {
+  if (originType === "QUOTE_ORDER") return "bg-[#1e3a5f] text-[#93c5fd]";
+  if (originType === "ORDER") return "bg-[#14532d] text-[#86efac]";
+  if (originType === "DIRECT") return "bg-[#3f1f00] text-[#fbbf24]";
+  return "bg-[#1e2332] text-[#94a3b8]";
+}
+
 function parseBrlToNumber(value: string): number {
   const normalized = value.replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".").trim();
   const parsed = Number(normalized);
@@ -51,9 +66,10 @@ function parseBrlToNumber(value: string): number {
 
 type FiscalRow = {
   id: number;
-  orderId: number;
+  orderId: number | null;
   fiscalId: number | null;
   orderStatus: string;
+  originType: "ORDER" | "QUOTE_ORDER" | "DIRECT" | "UNKNOWN";
   numero: string;
   modelo: string;
   serie: string;
@@ -79,6 +95,7 @@ type EmitItem = {
 type FiscalSortBy = "recent" | "numero_asc" | "numero_desc" | "valor_asc" | "valor_desc";
 type FiscalStatusFilter = "all" | "autorizada" | "pendente" | "erro" | "cancelada";
 type FiscalModelFilter = "all" | "nfe55" | "nfce65";
+type FiscalOriginFilter = "all" | "order" | "quote_order" | "direct";
 
 export default function FiscalPage() {
   const router = useRouter();
@@ -86,11 +103,10 @@ export default function FiscalPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [orders, setOrders] = useState<OrderListItem[]>([]);
+  const [documents, setDocuments] = useState<FiscalDocument[]>([]);
   const [kpiReady, setKpiReady] = useState(false);
   const [emitModalOpen, setEmitModalOpen] = useState(false);
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: "success" | "error" }>>([]);
-  const [manualRows, setManualRows] = useState<FiscalRow[]>([]);
   const [emitForm, setEmitForm] = useState({
     destinatario: "",
     documento: "",
@@ -117,17 +133,18 @@ export default function FiscalPage() {
   const [sortBy, setSortBy] = useState<FiscalSortBy>("recent");
   const [statusFilter, setStatusFilter] = useState<FiscalStatusFilter>("all");
   const [modelFilter, setModelFilter] = useState<FiscalModelFilter>("all");
+  const [originFilter, setOriginFilter] = useState<FiscalOriginFilter>("all");
   const [emissaoFilter, setEmissaoFilter] = useState("");
   const [detailRow, setDetailRow] = useState<FiscalRow | null>(null);
 
-  async function loadOrdersOnly(token: string) {
-    const orderResponse = await listOrdersRequest(token, {
+  async function loadDocumentsOnly(token: string) {
+    const fiscalResponse = await listFiscalDocumentsRequest(token, {
       page: 1,
-      pageSize: 60,
+      pageSize: 120,
       sortBy: "id",
       sortDir: "desc",
     });
-    setOrders(orderResponse.items);
+    setDocuments(fiscalResponse.items);
   }
 
   async function refreshFiscal(showToast = false) {
@@ -138,7 +155,7 @@ export default function FiscalPage() {
     }
     setRefreshing(true);
     try {
-      const [payload] = await Promise.all([dashboardSummaryRequest(token), loadOrdersOnly(token)]);
+      const [payload] = await Promise.all([dashboardSummaryRequest(token), loadDocumentsOnly(token)]);
       setSummary(payload);
       setError("");
       if (showToast) {
@@ -185,7 +202,7 @@ export default function FiscalPage() {
     setKpiReady(false);
     const timer = window.setTimeout(() => setKpiReady(true), 80);
     return () => window.clearTimeout(timer);
-  }, [loading, orders.length]);
+  }, [loading, documents.length]);
 
   const totals = useMemo(() => {
     if (!summary) return { emitted: 0, taxes: 0, errors: 0, authorized: 0 };
@@ -197,14 +214,15 @@ export default function FiscalPage() {
   }, [summary]);
 
   const fiscalRows = useMemo<FiscalRow[]>(() => {
-    return orders.flatMap((order) => {
-      const hasInvoiceRef = Boolean(order.invoice_number && String(order.invoice_number).trim());
-      const orderStatus = String(order.status || "").toUpperCase();
-      const mayBeFiscal = hasInvoiceRef || orderStatus.includes("INVOICED");
-      if (!mayBeFiscal) return [];
-
-      const model = "NF-e 55";
-      const status = mapFiscalStatus(order.status || "");
+    return documents.map((doc) => {
+      const documentType = String(doc.document_type || "").toUpperCase();
+      const model =
+        documentType === "NFCE" ? "NFC-e 65" : documentType === "NFSE" ? "NFS-e" : "NF-e 55";
+      const status = mapFiscalStatus(doc.status || "");
+      const originType =
+        doc.origin_type === "ORDER" || doc.origin_type === "QUOTE_ORDER" || doc.origin_type === "DIRECT"
+          ? doc.origin_type
+          : "UNKNOWN";
       const actions =
         status === "Autorizada"
           ? ["XML", "DANFE"]
@@ -212,32 +230,26 @@ export default function FiscalPage() {
             ? ["Ver log"]
             : ["Consultar"];
 
-      const numero =
-        hasInvoiceRef
-          ? String(order.invoice_number).replace(/\D/g, "").padStart(6, "0").slice(-6)
-          : String(order.id).padStart(6, "0");
-
-      return [
-        {
-          id: order.id,
-          orderId: order.id,
-          fiscalId: null,
-          orderStatus: order.status,
-          numero,
-          modelo: model,
-          serie: "001",
-          emissao: new Date(order.invoiced_at ?? order.created_at).toLocaleDateString("pt-BR"),
-          destinatario: order.client_name,
-          doc: "--",
-          valor: formatCurrency(order.total_amount),
-          status,
-          actions,
-        },
-      ];
+      return {
+        id: doc.id,
+        orderId: doc.order_id,
+        fiscalId: doc.id,
+        orderStatus: doc.status,
+        originType,
+        numero: String(doc.number || doc.id).padStart(6, "0"),
+        modelo: model,
+        serie: doc.series || "001",
+        emissao: new Date(doc.issued_at ?? doc.created_at).toLocaleDateString("pt-BR"),
+        destinatario: doc.recipient_name ?? "Destinatario nao informado",
+        doc: doc.recipient_document ?? "--",
+        valor: formatCurrency(doc.total_amount ?? 0),
+        status,
+        actions,
+      };
     });
-  }, [orders]);
+  }, [documents]);
 
-  const visibleRows = useMemo(() => [...manualRows, ...fiscalRows], [manualRows, fiscalRows]);
+  const visibleRows = fiscalRows;
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const base = visibleRows.filter((row) => {
@@ -248,6 +260,9 @@ export default function FiscalPage() {
 
       if (modelFilter === "nfe55" && row.modelo !== "NF-e 55") return false;
       if (modelFilter === "nfce65" && row.modelo !== "NFC-e 65") return false;
+      if (originFilter === "order" && row.originType !== "ORDER") return false;
+      if (originFilter === "quote_order" && row.originType !== "QUOTE_ORDER") return false;
+      if (originFilter === "direct" && row.originType !== "DIRECT") return false;
       if (emissaoFilter) {
         const [dd, mm, yyyy] = row.emissao.split("/");
         const iso = dd && mm && yyyy ? `${yyyy}-${mm}-${dd}` : "";
@@ -270,7 +285,7 @@ export default function FiscalPage() {
     else if (sortBy === "valor_desc") sorted.sort((a, b) => parseBrlToNumber(b.valor) - parseBrlToNumber(a.valor));
     else sorted.sort((a, b) => b.id - a.id);
     return sorted;
-  }, [visibleRows, query, statusFilter, modelFilter, emissaoFilter, sortBy]);
+  }, [visibleRows, query, statusFilter, modelFilter, originFilter, emissaoFilter, sortBy]);
   const pageSize = 8;
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -280,7 +295,7 @@ export default function FiscalPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [manualRows, fiscalRows, query, sortBy, statusFilter, modelFilter, emissaoFilter]);
+  }, [fiscalRows, query, sortBy, statusFilter, modelFilter, originFilter, emissaoFilter]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -335,8 +350,15 @@ export default function FiscalPage() {
     setEmitItems((current) => (current.length > 1 ? current.filter((item) => item.id !== id) : current));
   }
 
-  function handleEmitNfeSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleEmitNfeSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const token = getAccessToken();
+    if (!token) {
+      clearSession();
+      router.replace("/");
+      return;
+    }
+
     const destinatario = emitForm.destinatario.trim();
     const documento = emitForm.documento.trim();
     const manualValue = parseMoney(emitForm.valor);
@@ -356,28 +378,28 @@ export default function FiscalPage() {
       return;
     }
 
-    const now = new Date();
-    const generatedId = Date.now();
-    const generatedNumber = String(generatedId).slice(-6).padStart(6, "0");
-
-    setManualRows((current) => [
-      {
-        id: generatedId,
-        orderId: generatedId,
-        fiscalId: generatedId,
-        orderStatus: "INVOICED",
-        numero: generatedNumber,
-        modelo: emitForm.modelo,
-        serie: emitForm.serie.trim() || "001",
-        emissao: now.toLocaleDateString("pt-BR"),
-        destinatario,
-        doc: documento,
-        valor: formatCurrency(parsedValue),
-        status: "Pendente",
-        actions: ["Consultar", "Reenviar"],
-      },
-      ...current,
-    ]);
+    let createdId = Date.now();
+    let generatedNumber = String(createdId).slice(-6).padStart(6, "0");
+    try {
+      const response = await emitDirectFiscalRequest(token, {
+        document_type: emitForm.modelo.includes("NFC-e") ? "NFCE" : "NFE",
+        series: emitForm.serie.trim() || "001",
+        recipient_name: destinatario,
+        recipient_document: documento,
+        total_amount: parsedValue,
+      });
+      createdId = response.id;
+      generatedNumber = String(response.id).padStart(6, "0");
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : "Falha ao emitir documento fiscal.";
+      if (message === "unauthorized") {
+        clearSession();
+        router.replace("/");
+        return;
+      }
+      pushToast(message, "error");
+      return;
+    }
 
     setEmitForm({
       destinatario: "",
@@ -387,7 +409,8 @@ export default function FiscalPage() {
       serie: "001",
     });
     setEmitModalOpen(false);
-    pushToast("NF-e adicionada ao monitor com sucesso.", "success");
+    await loadDocumentsOnly(token);
+    pushToast(`NF-e ${generatedNumber} adicionada ao monitor com sucesso.`, "success");
   }
 
   async function handleRowAction(row: FiscalRow, action: string) {
@@ -404,11 +427,15 @@ export default function FiscalPage() {
     }
 
     try {
+      if (!row.orderId) {
+        pushToast("Documento sem origem de pedido nao pode ser emitido por esta acao.", "error");
+        return;
+      }
       if (row.orderStatus !== "INVOICED") {
         await invoiceOrderRequest(token, row.orderId);
       }
       await emitOrderFiscalRequest(token, row.orderId, { series: "001" });
-      await loadOrdersOnly(token);
+      await loadDocumentsOnly(token);
       pushToast(`Venda ${row.numero} emitida no fiscal com sucesso.`, "success");
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "Falha ao emitir fiscal.";
@@ -557,12 +584,22 @@ export default function FiscalPage() {
                       value={emissaoFilter}
                     />
                   </label>
+                  <label className="grid gap-1 text-[11px] font-mono uppercase tracking-[0.12em] text-[#64748b]">
+                    Origem
+                    <select className="h-8 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[12px] normal-case text-[#e2e8f0]" onChange={(e) => setOriginFilter(e.target.value as FiscalOriginFilter)} value={originFilter}>
+                      <option value="all">Todas</option>
+                      <option value="order">Pedido</option>
+                      <option value="quote_order">Orcamento-&gt;Pedido</option>
+                      <option value="direct">Direta</option>
+                    </select>
+                  </label>
                   <div className="flex items-end justify-end">
                     <button
                       className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-1.5 text-[12px] text-[#94a3b8] transition hover:border-[#3a4260] hover:text-[#e2e8f0]"
                       onClick={() => {
                         setStatusFilter("all");
                         setModelFilter("all");
+                        setOriginFilter("all");
                         setEmissaoFilter("");
                         setQueryInput("");
                         setQuery("");
@@ -592,6 +629,7 @@ export default function FiscalPage() {
                     <th className="px-4 py-3 font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b]">Modelo</th>
                     <th className="px-4 py-3 font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b]">Serie</th>
                     <th className="px-4 py-3 font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b]">Emissao</th>
+                    <th className="px-4 py-3 font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b]">Origem</th>
                     <th className="px-4 py-3 font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b]">Destinatario</th>
                     <th className="px-4 py-3 font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b]">CNPJ/CPF</th>
                     <th className="px-4 py-3 font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b]">Valor</th>
@@ -612,6 +650,9 @@ export default function FiscalPage() {
                       </td>
                       <td className="px-4 py-3 font-mono text-sm text-[#e2e8f0]">{order.serie}</td>
                       <td className="px-4 py-3 text-sm text-[#94a3b8]">{order.emissao}</td>
+                      <td className="px-4 py-3">
+                        <span className={`erp-tag ${originPill(order.originType)}`}>{originLabel(order.originType)}</span>
+                      </td>
                       <td className="px-4 py-3 text-sm font-medium text-[#e2e8f0]">{order.destinatario}</td>
                       <td className="px-4 py-3 font-mono text-sm text-[#64748b]">{order.doc}</td>
                       <td className="px-4 py-3 font-mono text-sm font-semibold text-[#e2e8f0]">{order.valor}</td>
@@ -625,7 +666,7 @@ export default function FiscalPage() {
                           {order.actions.map((action) => (
                             <button
                               className="erp-list-action-btn bg-[#161a24] px-2.5 py-1 text-[#64748b] hover:text-[#e2e8f0]"
-                              key={`${order.orderId}-${action}`}
+                              key={`${order.id}-${action}`}
                               onClick={(event) => {
                                 event.stopPropagation();
                                 void handleRowAction(order, action);

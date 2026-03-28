@@ -61,6 +61,26 @@ begin
     end
   );
 
+  THorse.Get('/api/v1/orders/:id/history',
+    procedure(AReq: THorseRequest; ARes: THorseResponse)
+    var
+      LId: Int64;
+      LJson: string;
+    begin
+      if not TAuthMiddleware.AuthorizePermission(AReq, ARes, 'orders.history') then Exit;
+
+      LId := StrToInt64Def(AReq.Params['id'], 0);
+      if LId <= 0 then
+      begin
+        TApiResponse.SendError(ARes, 400, 'invalid_id', 'ID invalido.');
+        Exit;
+      end;
+
+      LJson := TOrderService.GetOrderHistoryJson(LId);
+      TApiResponse.SendSuccess(ARes, LJson);
+    end
+  );
+
   THorse.Post('/api/v1/orders',
     procedure(AReq: THorseRequest; ARes: THorseResponse)
     var
@@ -130,11 +150,96 @@ begin
     end
   );
 
+  THorse.Put('/api/v1/orders/:id',
+    procedure(AReq: THorseRequest; ARes: THorseResponse)
+    var
+      LId: Int64;
+      LBody: TJSONValue;
+      LObj: TJSONObject;
+      LItems: TJSONArray;
+      LInput: TUpdateOrderInput;
+      LItemObj: TJSONObject;
+      LItemInput: TOrderItemInput;
+      LUpdated: Boolean;
+      LSession: TAuthSession;
+      I: Integer;
+    begin
+      if not TAuthMiddleware.AuthorizePermission(AReq, ARes, 'orders.update') then Exit;
+
+      LId := StrToInt64Def(AReq.Params['id'], 0);
+      if LId <= 0 then
+      begin
+        TApiResponse.SendError(ARes, 400, 'invalid_id', 'ID invalido.');
+        Exit;
+      end;
+
+      LBody := TJSONObject.ParseJSONValue(AReq.Body);
+      try
+        if (LBody = nil) or not (LBody is TJSONObject) then
+        begin
+          TApiResponse.SendError(ARes, 400, 'invalid_json', 'Payload JSON invalido.');
+          Exit;
+        end;
+
+        LObj := TJSONObject(LBody);
+        LInput := Default(TUpdateOrderInput);
+        LInput.ClientId := LObj.GetValue<Int64>('client_id', 0);
+        LInput.Notes := LObj.GetValue<string>('notes', '');
+        LInput.UpdatedByUserId := 0;
+        if AReq.Sessions.TryGetSession<TAuthSession>(LSession) then
+          LInput.UpdatedByUserId := LSession.UserId;
+
+        LItems := LObj.GetValue<TJSONArray>('items');
+        if LItems = nil then
+        begin
+          TApiResponse.SendError(ARes, 400, 'invalid_payload', 'Campo items e obrigatorio.');
+          Exit;
+        end;
+
+        SetLength(LInput.Items, LItems.Count);
+        for I := 0 to LItems.Count - 1 do
+        begin
+          if not (LItems.Items[I] is TJSONObject) then
+          begin
+            TApiResponse.SendError(ARes, 400, 'invalid_payload', 'Item de pedido invalido.');
+            Exit;
+          end;
+          LItemObj := TJSONObject(LItems.Items[I]);
+          LItemInput.ProductId := LItemObj.GetValue<Int64>('product_id', 0);
+          LItemInput.Quantity := LItemObj.GetValue<Double>('quantity', 0);
+          LInput.Items[I] := LItemInput;
+        end;
+
+        try
+          LUpdated := TOrderService.UpdateOrder(LId, LInput);
+        except
+          on E: Exception do
+          begin
+            TApiResponse.SendError(ARes, 400, 'order_validation', E.Message);
+            Exit;
+          end;
+        end;
+
+        if not LUpdated then
+        begin
+          TApiResponse.SendError(ARes, 404, 'order_not_found', 'Pedido nao encontrado.');
+          Exit;
+        end;
+
+        TApiResponse.SendSuccess(ARes, '{"status":"ok"}');
+      finally
+        LBody.Free;
+      end;
+    end
+  );
+
   THorse.Post('/api/v1/orders/:id/cancel',
     procedure(AReq: THorseRequest; ARes: THorseResponse)
     var
       LId: Int64;
       LCanceled: Boolean;
+      LSession: TAuthSession;
+      LUserId: Int64;
     begin
       if not TAuthMiddleware.AuthorizePermission(AReq, ARes, 'orders.cancel') then Exit;
 
@@ -145,8 +250,12 @@ begin
         Exit;
       end;
 
+      LUserId := 0;
+      if AReq.Sessions.TryGetSession<TAuthSession>(LSession) then
+        LUserId := LSession.UserId;
+
       try
-        LCanceled := TOrderService.CancelOrder(LId);
+        LCanceled := TOrderService.CancelOrder(LId, LUserId);
       except
         on E: Exception do
         begin
@@ -169,6 +278,8 @@ begin
     var
       LId: Int64;
       LOk: Boolean;
+      LSession: TAuthSession;
+      LUserId: Int64;
     begin
       if not TAuthMiddleware.AuthorizePermission(AReq, ARes, 'orders.confirm') then Exit;
 
@@ -179,8 +290,12 @@ begin
         Exit;
       end;
 
+      LUserId := 0;
+      if AReq.Sessions.TryGetSession<TAuthSession>(LSession) then
+        LUserId := LSession.UserId;
+
       try
-        LOk := TOrderService.ConfirmOrder(LId);
+        LOk := TOrderService.ConfirmOrder(LId, LUserId);
       except
         on E: Exception do
         begin
@@ -208,6 +323,8 @@ begin
       LInput: TInvoiceInput;
       LDateText: string;
       LOk: Boolean;
+      LSession: TAuthSession;
+      LUserId: Int64;
     begin
       if not TAuthMiddleware.AuthorizePermission(AReq, ARes, 'orders.invoice') then Exit;
 
@@ -258,8 +375,12 @@ begin
         end;
       end;
 
+      LUserId := 0;
+      if AReq.Sessions.TryGetSession<TAuthSession>(LSession) then
+        LUserId := LSession.UserId;
+
       try
-        LOk := TOrderService.InvoiceOrder(LId, LInput);
+        LOk := TOrderService.InvoiceOrder(LId, LInput, LUserId);
       except
         on E: Exception do
         begin

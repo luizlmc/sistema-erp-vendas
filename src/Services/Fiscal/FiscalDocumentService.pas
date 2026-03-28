@@ -7,8 +7,20 @@ uses
 
 type
   TFiscalEmitInput = record
+    DocumentType: string;
     Series: string;
     Number: string;
+    TotalAmount: Double;
+  end;
+
+  TFiscalEmitDirectInput = record
+    DocumentType: string;
+    Series: string;
+    Number: string;
+    ClientId: Int64;
+    RecipientName: string;
+    RecipientDocument: string;
+    TotalAmount: Double;
   end;
 
   TFiscalDocumentService = class
@@ -18,6 +30,7 @@ type
     class function GetByOrderJson(const AOrderId: Int64): string; static;
     class function ProviderInfoJson: string; static;
     class function EmitOrderNFe(const AOrderId: Int64; const AInput: TFiscalEmitInput): Int64; static;
+    class function EmitDirectDocument(const AInput: TFiscalEmitDirectInput): Int64; static;
     class function CancelDocument(const AId: Int64; const AReason: string): Boolean; static;
   end;
 
@@ -79,7 +92,11 @@ begin
     if Trim(AParams.Status) <> '' then
       LConditions.Add('UPPER(f.status) = :status');
     if Trim(AParams.Q) <> '' then
-      LConditions.Add('(COALESCE(f.number, '''') ILIKE :q OR COALESCE(f.access_key, '''') ILIKE :q OR COALESCE(f.protocol, '''') ILIKE :q OR COALESCE(o.invoice_number, '''') ILIKE :q)');
+      LConditions.Add(
+        '(COALESCE(f.number, '''') ILIKE :q OR COALESCE(f.access_key, '''') ILIKE :q OR ' +
+        ' COALESCE(f.protocol, '''') ILIKE :q OR COALESCE(o.invoice_number, '''') ILIKE :q OR ' +
+        ' COALESCE(c.name, '''') ILIKE :q OR COALESCE(f.recipient_name, '''') ILIKE :q)'
+      );
 
     LWhere := '';
     if LConditions.Count > 0 then
@@ -101,7 +118,8 @@ begin
     LCountQuery.SQL.Text :=
       'SELECT COUNT(*) AS total ' +
       'FROM erp_fiscal_documents f ' +
-      'INNER JOIN erp_orders o ON o.id = f.order_id ' +
+      'LEFT JOIN erp_orders o ON o.id = f.order_id ' +
+      'LEFT JOIN erp_clients c ON c.id = COALESCE(f.client_id, o.client_id) ' +
       LWhere;
     if AParams.OrderIdSet then
       LCountQuery.ParamByName('order_id').AsLargeInt := AParams.OrderId;
@@ -115,10 +133,12 @@ begin
 
     LQuery.Connection := LConnection;
     LQuery.SQL.Text :=
-      'SELECT f.id, f.order_id, f.status, f.document_type, f.series, f.number, f.access_key, ' +
-      ' f.protocol, f.error_message, f.issued_at, f.canceled_at, f.created_at, f.updated_at, o.invoice_number ' +
+      'SELECT f.id, f.order_id, f.origin_type, f.origin_id, f.client_id, f.recipient_name, f.recipient_document, f.total_amount, ' +
+      ' f.status, f.document_type, f.series, f.number, f.access_key, f.protocol, f.error_message, ' +
+      ' f.issued_at, f.canceled_at, f.created_at, f.updated_at, o.invoice_number, c.name AS client_name, c.document AS client_document ' +
       'FROM erp_fiscal_documents f ' +
-      'INNER JOIN erp_orders o ON o.id = f.order_id ' +
+      'LEFT JOIN erp_orders o ON o.id = f.order_id ' +
+      'LEFT JOIN erp_clients c ON c.id = COALESCE(f.client_id, o.client_id) ' +
       LWhere + ' ' +
       'ORDER BY ' + LSortBy + ' ' + LSortDir + ' ' +
       'LIMIT :limit OFFSET :offset';
@@ -136,7 +156,44 @@ begin
     begin
       LItem := TJSONObject.Create;
       LItem.AddPair('id', TJSONNumber.Create(LQuery.FieldByName('id').AsLargeInt));
-      LItem.AddPair('order_id', TJSONNumber.Create(LQuery.FieldByName('order_id').AsLargeInt));
+      if LQuery.FieldByName('order_id').IsNull then
+        LItem.AddPair('order_id', TJSONNull.Create)
+      else
+        LItem.AddPair('order_id', TJSONNumber.Create(LQuery.FieldByName('order_id').AsLargeInt));
+      if LQuery.FieldByName('origin_type').IsNull then
+        LItem.AddPair('origin_type', TJSONNull.Create)
+      else
+        LItem.AddPair('origin_type', LQuery.FieldByName('origin_type').AsString);
+      if LQuery.FieldByName('origin_id').IsNull then
+        LItem.AddPair('origin_id', TJSONNull.Create)
+      else
+        LItem.AddPair('origin_id', TJSONNumber.Create(LQuery.FieldByName('origin_id').AsLargeInt));
+      if LQuery.FieldByName('client_id').IsNull then
+        LItem.AddPair('client_id', TJSONNull.Create)
+      else
+        LItem.AddPair('client_id', TJSONNumber.Create(LQuery.FieldByName('client_id').AsLargeInt));
+      if LQuery.FieldByName('client_name').IsNull then
+      begin
+        if LQuery.FieldByName('recipient_name').IsNull then
+          LItem.AddPair('recipient_name', TJSONNull.Create)
+        else
+          LItem.AddPair('recipient_name', LQuery.FieldByName('recipient_name').AsString);
+      end
+      else
+        LItem.AddPair('recipient_name', LQuery.FieldByName('client_name').AsString);
+      if LQuery.FieldByName('client_document').IsNull then
+      begin
+        if LQuery.FieldByName('recipient_document').IsNull then
+          LItem.AddPair('recipient_document', TJSONNull.Create)
+        else
+          LItem.AddPair('recipient_document', LQuery.FieldByName('recipient_document').AsString);
+      end
+      else
+        LItem.AddPair('recipient_document', LQuery.FieldByName('client_document').AsString);
+      if LQuery.FieldByName('total_amount').IsNull then
+        LItem.AddPair('total_amount', TJSONNull.Create)
+      else
+        LItem.AddPair('total_amount', TJSONNumber.Create(LQuery.FieldByName('total_amount').AsFloat));
       LItem.AddPair('status', LQuery.FieldByName('status').AsString);
       LItem.AddPair('document_type', LQuery.FieldByName('document_type').AsString);
       LItem.AddPair('series', LQuery.FieldByName('series').AsString);
@@ -233,9 +290,13 @@ begin
   try
     LQuery.Connection := LConnection;
     LQuery.SQL.Text :=
-      'SELECT f.id, f.order_id, f.status, f.document_type, f.series, f.number, f.access_key, f.protocol, ' +
-      ' f.xml_content, f.error_message, f.issued_at, f.canceled_at, f.created_at, f.updated_at ' +
-      'FROM erp_fiscal_documents f WHERE f.id = :id LIMIT 1';
+      'SELECT f.id, f.order_id, f.origin_type, f.origin_id, f.client_id, f.recipient_name, f.recipient_document, f.total_amount, ' +
+      ' f.status, f.document_type, f.series, f.number, f.access_key, f.protocol, f.xml_content, ' +
+      ' f.error_message, f.issued_at, f.canceled_at, f.created_at, f.updated_at, c.name AS client_name, c.document AS client_document ' +
+      'FROM erp_fiscal_documents f ' +
+      'LEFT JOIN erp_orders o ON o.id = f.order_id ' +
+      'LEFT JOIN erp_clients c ON c.id = COALESCE(f.client_id, o.client_id) ' +
+      'WHERE f.id = :id LIMIT 1';
     LQuery.ParamByName('id').AsLargeInt := AId;
     LQuery.Open;
     if LQuery.IsEmpty then
@@ -244,7 +305,44 @@ begin
     LObj := TJSONObject.Create;
     try
       LObj.AddPair('id', TJSONNumber.Create(LQuery.FieldByName('id').AsLargeInt));
-      LObj.AddPair('order_id', TJSONNumber.Create(LQuery.FieldByName('order_id').AsLargeInt));
+      if LQuery.FieldByName('order_id').IsNull then
+        LObj.AddPair('order_id', TJSONNull.Create)
+      else
+        LObj.AddPair('order_id', TJSONNumber.Create(LQuery.FieldByName('order_id').AsLargeInt));
+      if LQuery.FieldByName('origin_type').IsNull then
+        LObj.AddPair('origin_type', TJSONNull.Create)
+      else
+        LObj.AddPair('origin_type', LQuery.FieldByName('origin_type').AsString);
+      if LQuery.FieldByName('origin_id').IsNull then
+        LObj.AddPair('origin_id', TJSONNull.Create)
+      else
+        LObj.AddPair('origin_id', TJSONNumber.Create(LQuery.FieldByName('origin_id').AsLargeInt));
+      if LQuery.FieldByName('client_id').IsNull then
+        LObj.AddPair('client_id', TJSONNull.Create)
+      else
+        LObj.AddPair('client_id', TJSONNumber.Create(LQuery.FieldByName('client_id').AsLargeInt));
+      if LQuery.FieldByName('client_name').IsNull then
+      begin
+        if LQuery.FieldByName('recipient_name').IsNull then
+          LObj.AddPair('recipient_name', TJSONNull.Create)
+        else
+          LObj.AddPair('recipient_name', LQuery.FieldByName('recipient_name').AsString);
+      end
+      else
+        LObj.AddPair('recipient_name', LQuery.FieldByName('client_name').AsString);
+      if LQuery.FieldByName('client_document').IsNull then
+      begin
+        if LQuery.FieldByName('recipient_document').IsNull then
+          LObj.AddPair('recipient_document', TJSONNull.Create)
+        else
+          LObj.AddPair('recipient_document', LQuery.FieldByName('recipient_document').AsString);
+      end
+      else
+        LObj.AddPair('recipient_document', LQuery.FieldByName('client_document').AsString);
+      if LQuery.FieldByName('total_amount').IsNull then
+        LObj.AddPair('total_amount', TJSONNull.Create)
+      else
+        LObj.AddPair('total_amount', TJSONNumber.Create(LQuery.FieldByName('total_amount').AsFloat));
       LObj.AddPair('status', LQuery.FieldByName('status').AsString);
       LObj.AddPair('document_type', LQuery.FieldByName('document_type').AsString);
       LObj.AddPair('series', LQuery.FieldByName('series').AsString);
@@ -335,7 +433,13 @@ var
   LConnection: TFDConnection;
   LQuery: TFDQuery;
   LOrderStatus: string;
+  LOrderClientId: Int64;
+  LOrderClientName: string;
+  LOrderClientDocument: string;
+  LOrderTotalAmount: Double;
+  LHasQuoteOrigin: Boolean;
   LFiscalId: Int64;
+  LDocumentType: string;
   LSeries: string;
   LNumber: string;
   LAccessKey: string;
@@ -352,12 +456,21 @@ begin
       LQuery.Connection := LConnection;
 
       LQuery.SQL.Text :=
-        'SELECT status FROM erp_orders WHERE id = :id FOR UPDATE';
+        'SELECT o.status, o.client_id, o.total_amount, c.name AS client_name, c.document AS client_document, ' +
+        ' EXISTS(SELECT 1 FROM erp_quotes q WHERE q.linked_order_id = o.id) AS has_quote_origin ' +
+        'FROM erp_orders o ' +
+        'INNER JOIN erp_clients c ON c.id = o.client_id ' +
+        'WHERE o.id = :id FOR UPDATE';
       LQuery.ParamByName('id').AsLargeInt := AOrderId;
       LQuery.Open;
       if LQuery.IsEmpty then
         raise Exception.Create('Pedido nao encontrado.');
       LOrderStatus := UpperCase(LQuery.FieldByName('status').AsString);
+      LOrderClientId := LQuery.FieldByName('client_id').AsLargeInt;
+      LOrderTotalAmount := LQuery.FieldByName('total_amount').AsFloat;
+      LOrderClientName := LQuery.FieldByName('client_name').AsString;
+      LOrderClientDocument := LQuery.FieldByName('client_document').AsString;
+      LHasQuoteOrigin := LQuery.FieldByName('has_quote_origin').AsBoolean;
       LQuery.Close;
 
       if LOrderStatus <> 'INVOICED' then
@@ -375,6 +488,12 @@ begin
       if LSeries = '' then
         LSeries := '1';
 
+      LDocumentType := UpperCase(Trim(AInput.DocumentType));
+      if LDocumentType = '' then
+        LDocumentType := 'NFE';
+      if (LDocumentType <> 'NFE') and (LDocumentType <> 'NFCE') and (LDocumentType <> 'NFSE') then
+        raise Exception.Create('Tipo de documento fiscal invalido.');
+
       LNumber := Trim(AInput.Number);
       if LNumber = '' then
       begin
@@ -388,11 +507,21 @@ begin
 
       LQuery.SQL.Text :=
         'INSERT INTO erp_fiscal_documents (' +
-        ' order_id, status, document_type, series, number, created_at, updated_at' +
+        ' order_id, origin_type, origin_id, client_id, recipient_name, recipient_document, total_amount, status, document_type, series, number, created_at, updated_at' +
         ') VALUES (' +
-        ' :order_id, ''PENDING'', ''NFE'', :series, :number, NOW(), NOW()' +
+        ' :order_id, :origin_type, :origin_id, :client_id, :recipient_name, :recipient_document, :total_amount, ''PENDING'', :document_type, :series, :number, NOW(), NOW()' +
         ') RETURNING id';
       LQuery.ParamByName('order_id').AsLargeInt := AOrderId;
+      if LHasQuoteOrigin then
+        LQuery.ParamByName('origin_type').AsString := 'QUOTE_ORDER'
+      else
+        LQuery.ParamByName('origin_type').AsString := 'ORDER';
+      LQuery.ParamByName('origin_id').AsLargeInt := AOrderId;
+      LQuery.ParamByName('client_id').AsLargeInt := LOrderClientId;
+      LQuery.ParamByName('recipient_name').AsString := Copy(Trim(LOrderClientName), 1, 150);
+      LQuery.ParamByName('recipient_document').AsString := Copy(Trim(LOrderClientDocument), 1, 30);
+      LQuery.ParamByName('total_amount').AsFloat := LOrderTotalAmount;
+      LQuery.ParamByName('document_type').AsString := LDocumentType;
       LQuery.ParamByName('series').AsString := LSeries;
       LQuery.ParamByName('number').AsString := LNumber;
       LQuery.Open;
@@ -426,6 +555,105 @@ begin
 
       LConnection.Commit;
       Result := LFiscalId;
+    except
+      LConnection.Rollback;
+      raise;
+    end;
+  finally
+    LQuery.Free;
+    LConnection.Free;
+  end;
+end;
+
+class function TFiscalDocumentService.EmitDirectDocument(
+  const AInput: TFiscalEmitDirectInput
+): Int64;
+var
+  LConnection: TFDConnection;
+  LQuery: TFDQuery;
+  LDocumentType: string;
+  LSeries: string;
+  LNumber: string;
+  LClientId: Int64;
+  LRecipientName: string;
+  LRecipientDocument: string;
+begin
+  Result := 0;
+  LConnection := TConnectionFactory.NewConnection;
+  LQuery := TFDQuery.Create(nil);
+  try
+    LConnection.StartTransaction;
+    try
+      LQuery.Connection := LConnection;
+
+      LDocumentType := UpperCase(Trim(AInput.DocumentType));
+      if LDocumentType = '' then
+        LDocumentType := 'NFE';
+      if (LDocumentType <> 'NFE') and (LDocumentType <> 'NFCE') and (LDocumentType <> 'NFSE') then
+        raise Exception.Create('Tipo de documento fiscal invalido.');
+
+      LSeries := Trim(AInput.Series);
+      if LSeries = '' then
+        LSeries := '1';
+
+      LNumber := Trim(AInput.Number);
+      if LNumber = '' then
+      begin
+        LQuery.SQL.Text :=
+          'SELECT LPAD(CAST(COALESCE(MAX(id), 0) + 1 AS VARCHAR), 9, ''0'') AS next_number ' +
+          'FROM erp_fiscal_documents';
+        LQuery.Open;
+        LNumber := LQuery.FieldByName('next_number').AsString;
+        LQuery.Close;
+      end;
+
+      LClientId := AInput.ClientId;
+      LRecipientName := Trim(AInput.RecipientName);
+      LRecipientDocument := Trim(AInput.RecipientDocument);
+      if LClientId > 0 then
+      begin
+        LQuery.SQL.Text :=
+          'SELECT name, document FROM erp_clients WHERE id = :id LIMIT 1';
+        LQuery.ParamByName('id').AsLargeInt := LClientId;
+        LQuery.Open;
+        if LQuery.IsEmpty then
+          raise Exception.Create('Cliente informado nao encontrado.');
+        if LRecipientName = '' then
+          LRecipientName := LQuery.FieldByName('name').AsString;
+        if LRecipientDocument = '' then
+          LRecipientDocument := LQuery.FieldByName('document').AsString;
+        LQuery.Close;
+      end;
+
+      if LRecipientName = '' then
+        raise Exception.Create('Destinatario e obrigatorio para emissao direta.');
+      if AInput.TotalAmount <= 0 then
+        raise Exception.Create('Valor total deve ser maior que zero para emissao direta.');
+
+      LQuery.SQL.Text :=
+        'INSERT INTO erp_fiscal_documents (' +
+        ' order_id, origin_type, origin_id, client_id, recipient_name, recipient_document, total_amount, status, document_type, series, number, created_at, updated_at' +
+        ') VALUES (' +
+        ' NULL, ''DIRECT'', NULL, :client_id, :recipient_name, :recipient_document, :total_amount, ''PENDING'', :document_type, :series, :number, NOW(), NOW()' +
+        ') RETURNING id';
+      if LClientId > 0 then
+        LQuery.ParamByName('client_id').AsLargeInt := LClientId
+      else
+        LQuery.ParamByName('client_id').Clear;
+      LQuery.ParamByName('recipient_name').AsString := Copy(LRecipientName, 1, 150);
+      if LRecipientDocument = '' then
+        LQuery.ParamByName('recipient_document').Clear
+      else
+        LQuery.ParamByName('recipient_document').AsString := Copy(LRecipientDocument, 1, 30);
+      LQuery.ParamByName('total_amount').AsFloat := AInput.TotalAmount;
+      LQuery.ParamByName('document_type').AsString := LDocumentType;
+      LQuery.ParamByName('series').AsString := LSeries;
+      LQuery.ParamByName('number').AsString := LNumber;
+      LQuery.Open;
+      Result := LQuery.FieldByName('id').AsLargeInt;
+      LQuery.Close;
+
+      LConnection.Commit;
     except
       LConnection.Rollback;
       raise;

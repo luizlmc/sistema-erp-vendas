@@ -335,9 +335,25 @@ export type OrderDetail = {
   }>;
 };
 
+export type OrderHistoryItem = {
+  id: number;
+  old_status: string | null;
+  new_status: string;
+  action: string;
+  note: string | null;
+  changed_by_name: string | null;
+  changed_at: string;
+};
+
 export type FiscalDocument = {
   id: number;
-  order_id: number;
+  order_id: number | null;
+  origin_type: "ORDER" | "QUOTE_ORDER" | "DIRECT" | null;
+  origin_id: number | null;
+  client_id: number | null;
+  recipient_name: string | null;
+  recipient_document: string | null;
+  total_amount: number | null;
   status: string;
   document_type: string;
   series: string;
@@ -351,6 +367,25 @@ export type FiscalDocument = {
   updated_at: string;
 };
 
+export type FiscalDocumentListResponse = {
+  items: FiscalDocument[];
+  pagination: {
+    page: number;
+    page_size: number;
+    total: number;
+    total_pages: number;
+  };
+  sort: {
+    by: string;
+    dir: "ASC" | "DESC";
+  };
+  filters: {
+    q: string | null;
+    status: string | null;
+    order_id: number | null;
+  };
+};
+
 export type OrderCreatePayload = {
   client_id: number;
   notes?: string;
@@ -359,6 +394,8 @@ export type OrderCreatePayload = {
     quantity: number;
   }>;
 };
+
+export type OrderUpdatePayload = OrderCreatePayload;
 
 export type QuoteStatus = "DRAFTING" | "PENDING" | "APPROVED" | "REJECTED" | "CONVERTED" | "CANCELED";
 
@@ -912,6 +949,22 @@ export async function getOrderRequest(
   return parseJson<OrderDetail>(response);
 }
 
+export async function getOrderHistoryRequest(
+  accessToken: string,
+  orderId: number,
+): Promise<{ items: OrderHistoryItem[] }> {
+  const response = await apiFetch(`/api/v1/orders/${orderId}/history`, {
+    method: "GET",
+    headers: withAuthHeaders(accessToken),
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Falha ao carregar historico do pedido.");
+  }
+
+  return parseJson<{ items: OrderHistoryItem[] }>(response);
+}
+
 export async function createOrderRequest(
   accessToken: string,
   payload: OrderCreatePayload,
@@ -930,6 +983,27 @@ export async function createOrderRequest(
   }
 
   return parseJson<{ status: string; id: number }>(response);
+}
+
+export async function updateOrderRequest(
+  accessToken: string,
+  orderId: number,
+  payload: OrderUpdatePayload,
+): Promise<{ status: string }> {
+  const response = await apiFetch(`/api/v1/orders/${orderId}`, {
+    method: "PUT",
+    headers: {
+      ...withAuthHeaders(accessToken),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Falha ao atualizar pedido.");
+  }
+
+  return parseJson<{ status: string }>(response);
 }
 
 export async function invoiceOrderRequest(
@@ -970,7 +1044,7 @@ export async function invoiceOrderRequest(
 export async function emitOrderFiscalRequest(
   accessToken: string,
   orderId: number,
-  payload?: { series?: string; number?: string },
+  payload?: { document_type?: "NFE" | "NFCE" | "NFSE"; series?: string; number?: string },
 ): Promise<{ status: string; id: number }> {
   const response = await apiFetch(`/api/v1/orders/${orderId}/fiscal/emit`, {
     method: "POST",
@@ -979,6 +1053,7 @@ export async function emitOrderFiscalRequest(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
+      document_type: payload?.document_type ?? "NFE",
       series: payload?.series ?? "",
       number: payload?.number ?? "",
     }),
@@ -989,6 +1064,75 @@ export async function emitOrderFiscalRequest(
   }
 
   return parseJson<{ status: string; id: number }>(response);
+}
+
+export async function emitDirectFiscalRequest(
+  accessToken: string,
+  payload: {
+    document_type?: "NFE" | "NFCE" | "NFSE";
+    series?: string;
+    number?: string;
+    client_id?: number;
+    recipient_name: string;
+    recipient_document?: string;
+    total_amount?: number;
+  },
+): Promise<{ status: string; id: number }> {
+  const response = await apiFetch("/api/v1/fiscal/documents/emit", {
+    method: "POST",
+    headers: {
+      ...withAuthHeaders(accessToken),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      document_type: payload.document_type ?? "NFE",
+      series: payload.series ?? "",
+      number: payload.number ?? "",
+      client_id: payload.client_id ?? 0,
+      recipient_name: payload.recipient_name,
+      recipient_document: payload.recipient_document ?? "",
+      total_amount: payload.total_amount ?? 0,
+    }),
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Falha ao emitir documento fiscal direto.");
+  }
+
+  return parseJson<{ status: string; id: number }>(response);
+}
+
+export async function listFiscalDocumentsRequest(
+  accessToken: string,
+  params: {
+    page?: number;
+    pageSize?: number;
+    q?: string;
+    status?: string;
+    sortBy?: string;
+    sortDir?: "asc" | "desc";
+    orderId?: number;
+  } = {},
+): Promise<FiscalDocumentListResponse> {
+  const query = new URLSearchParams();
+  query.set("page", String(params.page ?? 1));
+  query.set("page_size", String(params.pageSize ?? 100));
+  if (params.q?.trim()) query.set("q", params.q.trim());
+  if (params.status?.trim()) query.set("status", params.status.trim());
+  if (params.sortBy?.trim()) query.set("sort_by", params.sortBy.trim());
+  if (params.sortDir) query.set("sort_dir", params.sortDir);
+  if (params.orderId && params.orderId > 0) query.set("order_id", String(params.orderId));
+
+  const response = await apiFetch(`/api/v1/fiscal/documents?${query.toString()}`, {
+    method: "GET",
+    headers: withAuthHeaders(accessToken),
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Falha ao listar documentos fiscais.");
+  }
+
+  return parseJson<FiscalDocumentListResponse>(response);
 }
 
 export async function confirmOrderRequest(

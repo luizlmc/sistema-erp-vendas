@@ -11,6 +11,7 @@ import {
   QuoteStatus,
   QuoteDetail,
   QuoteHistoryItem,
+  OrderHistoryItem,
   ClientApiItem,
   OrderDetail,
   OrderListItem,
@@ -24,8 +25,10 @@ import {
   getQuoteRequest,
   confirmOrderRequest,
   createOrderRequest,
+  updateOrderRequest,
   emitOrderFiscalRequest,
   getOrderRequest,
+  getOrderHistoryRequest,
   getOrderFiscalRequest,
   invoiceOrderRequest,
   listClientsRequest,
@@ -176,11 +179,43 @@ function quoteStatusClass(status: QuoteStatus) {
   return "bg-[#1e2332] text-[#94a3b8]";
 }
 
-function canQuoteAction(status: QuoteStatus, action: "approve" | "reject" | "cancel" | "convert") {
+function canQuoteAction(
+  status: QuoteStatus,
+  action: "approve" | "reject" | "cancel" | "convert",
+  linkedOrderId?: number | null,
+) {
   if (action === "approve") return status === "DRAFTING" || status === "PENDING";
   if (action === "reject") return status === "DRAFTING" || status === "PENDING";
   if (action === "cancel") return status !== "CONVERTED" && status !== "CANCELED";
-  return status === "APPROVED";
+  return status === "APPROVED" && !linkedOrderId;
+}
+
+function quoteActionLabel(action?: string) {
+  const normalized = (action || "").toUpperCase();
+  if (normalized === "CREATED") return "Orcamento criado";
+  if (normalized === "UPDATED") return "Orcamento atualizado";
+  if (normalized === "APPROVED") return "Aprovacao comercial";
+  if (normalized === "REJECTED") return "Reprovacao comercial";
+  if (normalized === "CONVERTED") return "Conversao para pedido";
+  if (normalized === "CANCELED") return "Cancelamento";
+  return "Movimentacao";
+}
+
+function parseDateValue(value?: string | null) {
+  if (!value) return null;
+  const normalized = value.includes(" ") && !value.includes("T") ? value.replace(" ", "T") : value;
+  const direct = new Date(normalized);
+  if (!Number.isNaN(direct.getTime())) return direct;
+
+  const brPattern = /^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/;
+  const match = value.match(brPattern);
+  if (match) {
+    const [, dd, mm, yyyy, hh = "00", mi = "00", ss = "00"] = match;
+    const fromBr = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(mi), Number(ss));
+    if (!Number.isNaN(fromBr.getTime())) return fromBr;
+  }
+
+  return null;
 }
 
 function canOrderAction(statusRaw: string, action: "confirm" | "invoice" | "emit" | "cancel", hasFiscal = false) {
@@ -192,7 +227,7 @@ function canOrderAction(statusRaw: string, action: "confirm" | "invoice" | "emit
   const isOpen = status.includes("OPEN");
   const isPartial = status.includes("PARTIAL");
 
-  if (action === "confirm") return !isCanceled && !isInvoiced && !isApproved;
+  if (action === "confirm") return !isCanceled && !isInvoiced && (isOpen || isAwaiting);
   if (action === "invoice") return !isCanceled && !isInvoiced && (isApproved || isAwaiting || isOpen || isPartial);
   if (action === "emit") return !isCanceled && !hasFiscal;
   return !isCanceled && !isInvoiced;
@@ -236,6 +271,7 @@ export default function SalesPage() {
   const [page, setPage] = useState(1);
 
   const [detail, setDetail] = useState<OrderDetail | null>(null);
+  const [orderHistory, setOrderHistory] = useState<OrderHistoryItem[]>([]);
   const [quoteDetail, setQuoteDetail] = useState<QuoteDetail | null>(null);
   const [quoteHistory, setQuoteHistory] = useState<QuoteHistoryItem[]>([]);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -251,6 +287,7 @@ export default function SalesPage() {
   const [createClientId, setCreateClientId] = useState("");
   const [createItems, setCreateItems] = useState<CreateItem[]>([{ id: 1, productId: "", qty: "1" }]);
   const [creating, setCreating] = useState(false);
+  const [editingOrderId, setEditingOrderId] = useState<number | null>(null);
   const [editingQuoteId, setEditingQuoteId] = useState<number | null>(null);
 
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: "success" | "error" }>>([]);
@@ -268,12 +305,6 @@ export default function SalesPage() {
     const id = Date.now() + Math.floor(Math.random() * 1000);
     setToasts((s) => [...s, { id, message, type }]);
     window.setTimeout(() => setToasts((s) => s.filter((t) => t.id !== id)), 3500);
-  }
-
-  function parseDateValue(value?: string | null) {
-    if (!value) return null;
-    const date = new Date(value.includes(" ") && !value.includes("T") ? value.replace(" ", "T") : value);
-    return Number.isNaN(date.getTime()) ? null : date;
   }
 
   function saveCurrentNote() {
@@ -857,6 +888,25 @@ export default function SalesPage() {
 
   const orderTimeline = useMemo(() => {
     if (!detail) return [];
+    const fromHistory = orderHistory
+      .filter((item) => parseDateValue(item.changed_at))
+      .map((item) => ({
+        label: item.action === "CREATED"
+          ? "Pedido criado"
+          : item.action === "CONFIRMED"
+            ? "Aprovacao comercial"
+            : item.action === "INVOICED"
+              ? "Faturamento"
+              : item.action === "CANCELED"
+                ? "Cancelamento"
+                : "Movimentacao",
+        value: item.changed_at,
+        note: item.note?.trim()
+          ? item.note
+          : `${item.old_status ? `${orderStatusLabel(item.old_status)} -> ` : ""}${orderStatusLabel(item.new_status)}${item.changed_by_name ? ` por ${item.changed_by_name}` : ""}`,
+      }));
+    if (fromHistory.length > 0) return fromHistory;
+
     const fiscal = fiscalByOrder[detail.id];
     const fromDetail = detail as unknown as {
       confirmed_at?: string;
@@ -892,16 +942,18 @@ export default function SalesPage() {
       },
     ];
     return events.filter((event) => parseDateValue(event.value));
-  }, [detail, currentOrderListItem, fiscalByOrder]);
+  }, [detail, currentOrderListItem, fiscalByOrder, orderHistory]);
 
   const quoteTimeline = useMemo(() => {
     if (!quoteDetail) return [];
     const fromHistory = quoteHistory
       .filter((item) => parseDateValue(item.changed_at))
       .map((item) => ({
-      label: item.action || "Movimentacao",
+      label: quoteActionLabel(item.action),
       value: item.changed_at,
-      note: `${item.old_status ? `${quoteStatusLabel(item.old_status)} -> ` : ""}${quoteStatusLabel(item.new_status)}${item.changed_by_name ? ` por ${item.changed_by_name}` : ""}`,
+      note: item.note?.trim()
+        ? item.note
+        : `${item.old_status ? `${quoteStatusLabel(item.old_status)} -> ` : ""}${quoteStatusLabel(item.new_status)}${item.changed_by_name ? ` por ${item.changed_by_name}` : ""}`,
       }));
     if (fromHistory.length > 0) return fromHistory;
     const createdOnly = [
@@ -925,6 +977,19 @@ export default function SalesPage() {
     return [];
   }
 
+  function normalizeOrderHistory(payload: unknown): OrderHistoryItem[] {
+    if (Array.isArray(payload)) return payload as OrderHistoryItem[];
+    if (
+      payload &&
+      typeof payload === "object" &&
+      "items" in payload &&
+      Array.isArray((payload as { items?: unknown }).items)
+    ) {
+      return (payload as { items: OrderHistoryItem[] }).items;
+    }
+    return [];
+  }
+
   async function refreshData(successMessage?: string) {
     const token = getAccessToken();
     if (!token) {
@@ -938,6 +1003,7 @@ export default function SalesPage() {
 
   async function openCreate(mode: CreateMode) {
     setCreateMode(mode);
+    setEditingOrderId(null);
     setEditingQuoteId(null);
     setCreateClientId("");
     setCreateItems([{ id: 1, productId: "", qty: "1" }]);
@@ -990,8 +1056,16 @@ export default function SalesPage() {
     try {
       setCreating(true);
       if (createMode === "order") {
-        const created = await createOrderRequest(token, { client_id: Number(createClientId), items: payloadItems });
-        toast(`Venda #${created.id} criada com sucesso.`, "success");
+        if (editingOrderId) {
+          await updateOrderRequest(token, editingOrderId, {
+            client_id: Number(createClientId),
+            items: payloadItems,
+          });
+          toast(`Venda #${editingOrderId} atualizada com sucesso.`, "success");
+        } else {
+          const created = await createOrderRequest(token, { client_id: Number(createClientId), items: payloadItems });
+          toast(`Venda #${created.id} criada com sucesso.`, "success");
+        }
         setReload((value) => value + 1);
       } else {
         if (editingQuoteId) {
@@ -1008,6 +1082,7 @@ export default function SalesPage() {
       }
 
       setCreateOpen(false);
+      setEditingOrderId(null);
       setEditingQuoteId(null);
       setCreateClientId("");
       setCreateItems([{ id: 1, productId: "", qty: "1" }]);
@@ -1024,8 +1099,12 @@ export default function SalesPage() {
     if (!token) return;
     try {
       setBusyId(orderId);
-      const payload = await getOrderRequest(token, orderId);
+      const [payload, historyPayload] = await Promise.all([
+        getOrderRequest(token, orderId),
+        getOrderHistoryRequest(token, orderId),
+      ]);
       setDetail(payload);
+      setOrderHistory(normalizeOrderHistory(historyPayload));
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "Falha ao abrir pedido.";
       toast(message, "error");
@@ -1073,8 +1152,12 @@ export default function SalesPage() {
       }
       await refreshData();
       if (detail?.id === invoiceModal.orderId) {
-        const orderPayload = await getOrderRequest(token, invoiceModal.orderId);
+        const [orderPayload, historyPayload] = await Promise.all([
+          getOrderRequest(token, invoiceModal.orderId),
+          getOrderHistoryRequest(token, invoiceModal.orderId),
+        ]);
         setDetail(orderPayload);
+        setOrderHistory(normalizeOrderHistory(historyPayload));
       }
       setInvoiceModal(null);
       toast(invoiceModal.emitAfter ? "Pedido faturado e fiscal emitido com sucesso." : "Pedido faturado com sucesso.", "success");
@@ -1089,6 +1172,14 @@ export default function SalesPage() {
   async function runOrderAction(orderId: number, action: "confirm" | "invoice" | "cancel" | "emit") {
     const token = getAccessToken();
     if (!token) return;
+    const current = orders.find((o) => o.id === orderId);
+    const hasFiscal = Object.prototype.hasOwnProperty.call(fiscalByOrder, orderId)
+      ? !!fiscalByOrder[orderId]
+      : Boolean(current?.invoice_number);
+    if (current && !canOrderAction(current.status, action, hasFiscal)) {
+      toast("Status atual do pedido nao permite esta acao.", "error");
+      return;
+    }
     try {
       setBusyId(orderId);
       if (action === "confirm") await confirmOrderRequest(token, orderId);
@@ -1102,7 +1193,6 @@ export default function SalesPage() {
         });
       if (action === "cancel") await cancelOrderRequest(token, orderId);
       if (action === "emit") {
-        const current = orders.find((o) => o.id === orderId);
         if (current && !current.status.toUpperCase().includes("INVOICED")) {
           await invoiceOrderRequest(token, orderId, {
             invoice_number: `PED-${String(orderId).padStart(6, "0")}`,
@@ -1116,8 +1206,12 @@ export default function SalesPage() {
       }
       await refreshData();
       if (detail?.id === orderId) {
-        const payload = await getOrderRequest(token, orderId);
+        const [payload, historyPayload] = await Promise.all([
+          getOrderRequest(token, orderId),
+          getOrderHistoryRequest(token, orderId),
+        ]);
         setDetail(payload);
+        setOrderHistory(normalizeOrderHistory(historyPayload));
       }
       toast("Acao aplicada com sucesso.", "success");
     } catch (requestError) {
@@ -1131,6 +1225,11 @@ export default function SalesPage() {
   async function runQuoteAction(quoteId: number, action: "approve" | "reject" | "cancel") {
     const token = getAccessToken();
     if (!token) return;
+    const current = quotes.find((q) => q.id === quoteId);
+    if (current && !canQuoteAction(current.status, action, current.linked_order_id)) {
+      toast("Status atual do orcamento nao permite esta acao.", "error");
+      return;
+    }
     try {
       setBusyId(quoteId);
       if (action === "approve") await approveQuoteRequest(token, quoteId);
@@ -1175,6 +1274,39 @@ export default function SalesPage() {
     }
   }
 
+  function openEditOrder(order: OrderListItem) {
+    const status = order.status.toUpperCase();
+    if (status.includes("CANCEL") || status.includes("INVOICED")) {
+      toast("Status atual do pedido nao permite edicao.", "error");
+      return;
+    }
+    const token = getAccessToken();
+    if (!token) return;
+    setBusyId(order.id);
+    getOrderRequest(token, order.id)
+      .then((payload) => {
+        setCreateMode("order");
+        setEditingOrderId(order.id);
+        setEditingQuoteId(null);
+        setCreateClientId(String(payload.client_id));
+        setCreateItems(
+          (payload.items || []).map((item, index) => ({
+            id: Date.now() + index,
+            productId: String(item.product_id),
+            qty: String(item.quantity),
+          })),
+        );
+        setDetail(null);
+        setOrderHistory([]);
+        setCreateOpen(true);
+      })
+      .catch((requestError) => {
+        const message = requestError instanceof Error ? requestError.message : "Falha ao abrir edicao do pedido.";
+        toast(message, "error");
+      })
+      .finally(() => setBusyId(null));
+  }
+
   function openEditQuote(quote: QuoteListItem) {
     if (quote.status === "CONVERTED" || quote.status === "CANCELED") {
       toast("Orcamento convertido/cancelado nao pode ser alterado.", "error");
@@ -1186,6 +1318,7 @@ export default function SalesPage() {
     getQuoteRequest(token, quote.id)
       .then((payload) => {
         setCreateMode("quote");
+        setEditingOrderId(null);
         setEditingQuoteId(quote.id);
         setCreateClientId(String(payload.client_id));
         setCreateItems(
@@ -1209,7 +1342,7 @@ export default function SalesPage() {
     if (!token) return;
     const quote = quotes.find((item) => item.id === quoteId);
     if (!quote) return;
-    if (!canQuoteAction(quote.status, "convert")) {
+    if (!canQuoteAction(quote.status, "convert", quote.linked_order_id)) {
       toast("Apenas orcamento aprovado pode ser convertido em pedido.", "error");
       return;
     }
@@ -1408,7 +1541,7 @@ export default function SalesPage() {
                       <button className="erp-list-action-btn disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "approve")} onClick={(event) => { event.stopPropagation(); runQuoteAction(quote.id, "approve"); }} type="button">Aprovar</button>
                       <button className="erp-list-action-btn disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "reject")} onClick={(event) => { event.stopPropagation(); runQuoteAction(quote.id, "reject"); }} type="button">Reprovar</button>
                       <button className="erp-list-action-btn disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "cancel")} onClick={(event) => { event.stopPropagation(); runQuoteAction(quote.id, "cancel"); }} type="button">Cancelar</button>
-                      <button className="erp-list-action-btn border-[#166534] bg-[#14532d] text-[#86efac] hover:border-[#15803d] hover:bg-[#166534] disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "convert")} onClick={(event) => { event.stopPropagation(); convertQuoteToOrder(quote.id); }} type="button">Converter</button>
+                      <button className="erp-list-action-btn border-[#166534] bg-[#14532d] text-[#86efac] hover:border-[#15803d] hover:bg-[#166534] disabled:opacity-40" disabled={busyId === quote.id || !canQuoteAction(quote.status, "convert", quote.linked_order_id)} onClick={(event) => { event.stopPropagation(); convertQuoteToOrder(quote.id); }} type="button">Converter</button>
                     </div>
                   </div>
                 ))}
@@ -1448,8 +1581,8 @@ export default function SalesPage() {
           <div className="h-[86vh] w-[min(900px,98vw)] overflow-hidden rounded-md border border-[#2a3045] bg-[#0f1117] shadow-2xl">
             <div className="flex h-full flex-col">
               <div className="flex items-start gap-2 border-b border-[#2a3045] px-5 py-4">
-                <div><h2 className="text-[16px] font-semibold text-[#e2e8f0]">{createMode === "order" ? "Nova venda" : editingQuoteId ? `Editar orcamento #${editingQuoteId}` : "Novo orcamento"}</h2><p className="mt-1 font-mono text-[11px] text-[#64748b]">{createMode === "order" ? "Pedido comercial" : "Orcamento comercial"}</p></div>
-                <div className="ml-auto flex gap-2"><button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={() => { setCreateOpen(false); setEditingQuoteId(null); }} type="button">Cancelar</button><button className="rounded border border-[#166534] bg-[#14532d] px-4 py-2 text-sm text-[#86efac]" form="create-sales-form" type="submit">{creating ? "Salvando..." : "Salvar"}</button></div>
+                <div><h2 className="text-[16px] font-semibold text-[#e2e8f0]">{createMode === "order" ? (editingOrderId ? `Editar venda #${editingOrderId}` : "Nova venda") : editingQuoteId ? `Editar orcamento #${editingQuoteId}` : "Novo orcamento"}</h2><p className="mt-1 font-mono text-[11px] text-[#64748b]">{createMode === "order" ? "Pedido comercial" : "Orcamento comercial"}</p></div>
+                <div className="ml-auto flex gap-2"><button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={() => { setCreateOpen(false); setEditingOrderId(null); setEditingQuoteId(null); }} type="button">Cancelar</button><button className="rounded border border-[#166534] bg-[#14532d] px-4 py-2 text-sm text-[#86efac]" form="create-sales-form" type="submit">{creating ? "Salvando..." : "Salvar"}</button></div>
               </div>
               <form className="flex-1 space-y-3 overflow-y-auto p-4" id="create-sales-form" onSubmit={submitCreate}>
                 <label className="grid gap-1 text-xs text-[#64748b]">Cliente *
@@ -1477,13 +1610,14 @@ export default function SalesPage() {
                   <p className="mt-1 font-mono text-[11px] text-[#64748b]">{detail.client_name} · {dmy(detail.created_at)}</p>
                 </div>
                 <div className="ml-auto flex gap-2">
+                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={busyId === detail.id || currentOrderStatus.includes("INVOICED") || currentOrderStatus.includes("CANCEL")} onClick={() => currentOrderListItem && openEditOrder(currentOrderListItem)} type="button">Editar</button>
                   <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "confirm", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "confirm")} type="button">Aprovar</button>
                   <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "invoice", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "invoice")} type="button">Faturar</button>
                   <button className="rounded border border-[#166534] bg-[#14532d] px-3 py-2 text-sm text-[#86efac] hover:border-[#15803d] disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "emit", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "emit")} type="button">Emitir fiscal</button>
                   <button className="rounded border border-[#7f1d1d] bg-[#3a1519] px-3 py-2 text-sm text-[#fca5a5] hover:border-[#991b1b] disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "cancel", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "cancel")} type="button">Cancelar</button>
                   <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={openProfessionalReport} type="button">Relatorio</button>
                   <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={printCurrentDetail} type="button">Imprimir</button>
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={() => setDetail(null)} type="button">Fechar</button>
+                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={() => { setDetail(null); setOrderHistory([]); }} type="button">Fechar</button>
                 </div>
               </div>
               <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 lg:grid-cols-[1.75fr_1fr]">
@@ -1538,13 +1672,22 @@ export default function SalesPage() {
                 <aside className={`overflow-y-auto border-l p-4 ${isLight ? "border-[#d1d9e6] bg-[#ffffff]" : "border-[#2a3045] bg-[#111827]"}`}>
                   <h3 className="mb-2 text-[13px] font-semibold uppercase tracking-[0.08em] text-[#94a3b8]">Timeline</h3>
                   <div className="mb-4 space-y-2">
-                    {orderTimeline.map((row, index) => (
-                      <div className="rounded border border-[#2a3045] bg-[#161a24] p-3" key={`${row.label}-${index}`}>
-                        <p className="font-mono text-[11px] text-[#93c5fd]">{row.label}</p>
-                        <p className="mt-1 text-[13px] text-[#e2e8f0]">{row.note}</p>
-                        <p className="mt-1 font-mono text-[10px] text-[#64748b]">{dmyhm(row.value)}</p>
-                      </div>
-                    ))}
+                    {orderTimeline.length === 0 ? (
+                      <p className="text-[12px] text-[#64748b]">Sem eventos registrados.</p>
+                    ) : (
+                      orderTimeline.map((row, index) => (
+                        <div
+                          className={`rounded border p-3 ${
+                            isLight ? "border-[#d1d9e6] bg-[#f8fafc]" : "border-[#2a3045] bg-[#161a24]"
+                          }`}
+                          key={`${row.label}-${index}`}
+                        >
+                          <p className={`font-mono text-[11px] ${isLight ? "text-[#2563eb]" : "text-[#93c5fd]"}`}>{row.label}</p>
+                          <p className={`mt-1 text-[13px] ${isLight ? "text-[#0f172a]" : "text-[#e2e8f0]"}`}>{row.note}</p>
+                          <p className="mt-1 font-mono text-[10px] text-[#64748b]">{dmyhm(row.value)}</p>
+                        </div>
+                      ))
+                    )}
                   </div>
                   <h3 className="mb-2 text-[13px] font-semibold uppercase tracking-[0.08em] text-[#94a3b8]">Anexos</h3>
                   <label className="mb-2 inline-flex h-8 cursor-pointer items-center rounded border border-dashed border-[#3a4260] bg-[#161a24] px-3 font-mono text-[11px] text-[#94a3b8] transition hover:border-[#64748b] hover:text-[#e2e8f0]">
@@ -1591,7 +1734,7 @@ export default function SalesPage() {
                   <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "reject")} onClick={() => quoteDetail && runQuoteAction(quoteDetail.id, "reject")} type="button">Reprovar</button>
                   <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "cancel")} onClick={() => quoteDetail && runQuoteAction(quoteDetail.id, "cancel")} type="button">Cancelar</button>
                   <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || quoteDetail.status === "CONVERTED" || quoteDetail.status === "CANCELED"} onClick={() => quoteDetail && openEditQuote({ id: quoteDetail.id, code: quoteDetail.code, client_id: quoteDetail.client_id, client_name: quoteDetail.client_name, status: quoteDetail.status, total_amount: quoteDetail.total_amount, items_count: quoteDetail.items.length, linked_order_id: quoteDetail.linked_order_id, created_at: quoteDetail.created_at })} type="button">Editar</button>
-                  <button className="rounded border border-[#166534] bg-[#14532d] px-3 py-2 text-sm text-[#86efac] hover:border-[#15803d] disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "convert")} onClick={() => quoteDetail && convertQuoteToOrder(quoteDetail.id)} type="button">Converter</button>
+                  <button className="rounded border border-[#166534] bg-[#14532d] px-3 py-2 text-sm text-[#86efac] hover:border-[#15803d] disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "convert", quoteDetail.linked_order_id)} onClick={() => quoteDetail && convertQuoteToOrder(quoteDetail.id)} type="button">Converter</button>
                   <button
                     className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]"
                     onClick={openProfessionalReport}
@@ -1659,9 +1802,14 @@ export default function SalesPage() {
                         <p className="text-[12px] text-[#64748b]">Sem historico registrado.</p>
                       ) : (
                         quoteTimeline.map((row, index) => (
-                          <div className="rounded border border-[#2a3045] bg-[#161a24] p-3" key={`${row.label}-${index}`}>
-                            <p className="font-mono text-[11px] text-[#93c5fd]">{row.label}</p>
-                            <p className="mt-1 text-[13px] text-[#e2e8f0]">{row.note}</p>
+                          <div
+                            className={`rounded border p-3 ${
+                              isLight ? "border-[#d1d9e6] bg-[#f8fafc]" : "border-[#2a3045] bg-[#161a24]"
+                            }`}
+                            key={`${row.label}-${index}`}
+                          >
+                            <p className={`font-mono text-[11px] ${isLight ? "text-[#2563eb]" : "text-[#93c5fd]"}`}>{row.label}</p>
+                            <p className={`mt-1 text-[13px] ${isLight ? "text-[#0f172a]" : "text-[#e2e8f0]"}`}>{row.note}</p>
                             <p className="mt-1 font-mono text-[10px] text-[#64748b]">{dmyhm(row.value)}</p>
                           </div>
                         ))

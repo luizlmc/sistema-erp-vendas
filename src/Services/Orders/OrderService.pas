@@ -28,14 +28,23 @@ type
     Items: TArray<TOrderItemInput>;
   end;
 
+  TUpdateOrderInput = record
+    ClientId: Int64;
+    Notes: string;
+    UpdatedByUserId: Int64;
+    Items: TArray<TOrderItemInput>;
+  end;
+
   TOrderService = class
   public
     class function ListOrdersJson(const AParams: TListQueryParams): string; static;
     class function GetOrderJson(const AId: Int64): string; static;
+    class function GetOrderHistoryJson(const AId: Int64): string; static;
     class function CreateOrder(const AInput: TCreateOrderInput): Int64; static;
-    class function ConfirmOrder(const AId: Int64): Boolean; static;
-    class function InvoiceOrder(const AId: Int64; const AInput: TInvoiceInput): Boolean; static;
-    class function CancelOrder(const AId: Int64): Boolean; static;
+    class function UpdateOrder(const AId: Int64; const AInput: TUpdateOrderInput): Boolean; static;
+    class function ConfirmOrder(const AId: Int64; const AUserId: Int64 = 0): Boolean; static;
+    class function InvoiceOrder(const AId: Int64; const AInput: TInvoiceInput; const AUserId: Int64 = 0): Boolean; static;
+    class function CancelOrder(const AId: Int64; const AUserId: Int64 = 0): Boolean; static;
   end;
 
 implementation
@@ -47,6 +56,79 @@ uses
   System.JSON,
   FireDAC.Comp.Client,
   DBConnectionFactory;
+
+function NormalizeOrderStatus(const AStatus: string): string;
+begin
+  Result := UpperCase(Trim(AStatus));
+end;
+
+function CanConfirmOrderStatus(const AStatus: string): Boolean;
+var
+  LStatus: string;
+begin
+  LStatus := NormalizeOrderStatus(AStatus);
+  Result :=
+    (LStatus = 'OPEN') or
+    (LStatus = 'AWAITING_APPROVAL') or
+    (LStatus = 'PENDING_APPROVAL');
+end;
+
+function CanInvoiceOrderStatus(const AStatus: string): Boolean;
+var
+  LStatus: string;
+begin
+  LStatus := NormalizeOrderStatus(AStatus);
+  Result :=
+    (LStatus = 'OPEN') or
+    (LStatus = 'CONFIRMED') or
+    (LStatus = 'APPROVED') or
+    (LStatus = 'AWAITING_APPROVAL') or
+    (LStatus = 'PENDING_APPROVAL') or
+    (LStatus = 'PARTIALLY_FULFILLED') or
+    (LStatus = 'PARTIAL');
+end;
+
+function IsCanceledOrderStatus(const AStatus: string): Boolean;
+begin
+  Result := Pos('CANCEL', NormalizeOrderStatus(AStatus)) > 0;
+end;
+
+function IsInvoicedOrderStatus(const AStatus: string): Boolean;
+begin
+  Result := Pos('INVOICED', NormalizeOrderStatus(AStatus)) > 0;
+end;
+
+procedure LogOrderStatus(
+  const AQuery: TFDQuery;
+  const AOrderId: Int64;
+  const AOldStatus: string;
+  const ANewStatus: string;
+  const AAction: string;
+  const ANote: string;
+  const AUserId: Int64
+);
+begin
+  AQuery.SQL.Text :=
+    'INSERT INTO erp_order_status_history ' +
+    '(order_id, old_status, new_status, action, note, changed_by_user_id) ' +
+    'VALUES (:order_id, :old_status, :new_status, :action, :note, :changed_by_user_id)';
+  AQuery.ParamByName('order_id').AsLargeInt := AOrderId;
+  if Trim(AOldStatus) = '' then
+    AQuery.ParamByName('old_status').Clear
+  else
+    AQuery.ParamByName('old_status').AsString := UpperCase(Trim(AOldStatus));
+  AQuery.ParamByName('new_status').AsString := UpperCase(Trim(ANewStatus));
+  AQuery.ParamByName('action').AsString := UpperCase(Trim(AAction));
+  if Trim(ANote) = '' then
+    AQuery.ParamByName('note').Clear
+  else
+    AQuery.ParamByName('note').AsString := Trim(ANote);
+  if AUserId > 0 then
+    AQuery.ParamByName('changed_by_user_id').AsLargeInt := AUserId
+  else
+    AQuery.ParamByName('changed_by_user_id').Clear;
+  AQuery.ExecSQL;
+end;
 
 class function TOrderService.ListOrdersJson(const AParams: TListQueryParams): string;
 var
@@ -319,6 +401,64 @@ begin
   end;
 end;
 
+class function TOrderService.GetOrderHistoryJson(const AId: Int64): string;
+var
+  LConnection: TFDConnection;
+  LQuery: TFDQuery;
+  LRoot: TJSONObject;
+  LList: TJSONArray;
+  LItem: TJSONObject;
+begin
+  LConnection := TConnectionFactory.NewConnection;
+  LQuery := TFDQuery.Create(nil);
+  LRoot := TJSONObject.Create;
+  LList := TJSONArray.Create;
+  try
+    LQuery.Connection := LConnection;
+    LQuery.SQL.Text :=
+      'SELECT h.id, h.old_status, h.new_status, h.action, h.note, h.changed_at, u.name AS changed_by_name ' +
+      'FROM erp_order_status_history h ' +
+      'LEFT JOIN erp_users u ON u.id = h.changed_by_user_id ' +
+      'WHERE h.order_id = :order_id ' +
+      'ORDER BY h.changed_at DESC, h.id DESC';
+    LQuery.ParamByName('order_id').AsLargeInt := AId;
+    LQuery.Open;
+
+    while not LQuery.Eof do
+    begin
+      LItem := TJSONObject.Create;
+      LItem.AddPair('id', TJSONNumber.Create(LQuery.FieldByName('id').AsLargeInt));
+      if LQuery.FieldByName('old_status').IsNull then
+        LItem.AddPair('old_status', TJSONNull.Create)
+      else
+        LItem.AddPair('old_status', LQuery.FieldByName('old_status').AsString);
+      LItem.AddPair('new_status', LQuery.FieldByName('new_status').AsString);
+      LItem.AddPair('action', LQuery.FieldByName('action').AsString);
+      if LQuery.FieldByName('note').IsNull then
+        LItem.AddPair('note', TJSONNull.Create)
+      else
+        LItem.AddPair('note', LQuery.FieldByName('note').AsString);
+      if LQuery.FieldByName('changed_by_name').IsNull then
+        LItem.AddPair('changed_by_name', TJSONNull.Create)
+      else
+        LItem.AddPair('changed_by_name', LQuery.FieldByName('changed_by_name').AsString);
+      LItem.AddPair('changed_at', LQuery.FieldByName('changed_at').AsString);
+      LList.AddElement(LItem);
+      LQuery.Next;
+    end;
+
+    LRoot.AddPair('items', LList);
+    LList := nil;
+    Result := LRoot.ToJSON;
+  finally
+    if Assigned(LList) then
+      LList.Free;
+    LRoot.Free;
+    LQuery.Free;
+    LConnection.Free;
+  end;
+end;
+
 class function TOrderService.CreateOrder(const AInput: TCreateOrderInput): Int64;
 var
   LConnection: TFDConnection;
@@ -422,6 +562,15 @@ begin
       LQuery.ParamByName('total_amount').AsFloat := LTotal;
       LQuery.ParamByName('id').AsLargeInt := LOrderId;
       LQuery.ExecSQL;
+      LogOrderStatus(
+        LQuery,
+        LOrderId,
+        '',
+        'OPEN',
+        'CREATED',
+        'Pedido criado.',
+        AInput.CreatedByUserId
+      );
 
       LConnection.Commit;
       Result := LOrderId;
@@ -435,7 +584,161 @@ begin
   end;
 end;
 
-class function TOrderService.ConfirmOrder(const AId: Int64): Boolean;
+class function TOrderService.UpdateOrder(const AId: Int64; const AInput: TUpdateOrderInput): Boolean;
+var
+  LConnection: TFDConnection;
+  LQuery: TFDQuery;
+  LItemsQuery: TFDQuery;
+  LStatus: string;
+  LLineNo: Integer;
+  LLineTotal: Double;
+  LTotal: Double;
+  LUnitPrice: Double;
+  LStockQty: Double;
+  I: Integer;
+begin
+  Result := False;
+  if AInput.ClientId <= 0 then
+    raise Exception.Create('Cliente invalido.');
+  if Length(AInput.Items) = 0 then
+    raise Exception.Create('Pedido deve conter ao menos um item.');
+
+  LConnection := TConnectionFactory.NewConnection;
+  LQuery := TFDQuery.Create(nil);
+  LItemsQuery := TFDQuery.Create(nil);
+  try
+    LConnection.StartTransaction;
+    try
+      LQuery.Connection := LConnection;
+      LItemsQuery.Connection := LConnection;
+
+      LQuery.SQL.Text := 'SELECT status FROM erp_orders WHERE id = :id FOR UPDATE';
+      LQuery.ParamByName('id').AsLargeInt := AId;
+      LQuery.Open;
+      if LQuery.IsEmpty then
+      begin
+        LConnection.Rollback;
+        Exit(False);
+      end;
+      LStatus := NormalizeOrderStatus(LQuery.FieldByName('status').AsString);
+      LQuery.Close;
+
+      if IsCanceledOrderStatus(LStatus) then
+        raise Exception.Create('Pedido cancelado nao pode ser alterado.');
+      if IsInvoicedOrderStatus(LStatus) then
+        raise Exception.Create('Pedido faturado nao pode ser alterado.');
+
+      LQuery.SQL.Text := 'SELECT 1 FROM erp_clients WHERE id = :id AND is_active = TRUE LIMIT 1';
+      LQuery.ParamByName('id').AsLargeInt := AInput.ClientId;
+      LQuery.Open;
+      if LQuery.IsEmpty then
+        raise Exception.Create('Cliente nao encontrado ou inativo.');
+      LQuery.Close;
+
+      LItemsQuery.SQL.Text :=
+        'SELECT product_id, quantity FROM erp_order_items WHERE order_id = :order_id FOR UPDATE';
+      LItemsQuery.ParamByName('order_id').AsLargeInt := AId;
+      LItemsQuery.Open;
+      while not LItemsQuery.Eof do
+      begin
+        LQuery.SQL.Text :=
+          'UPDATE erp_products SET stock_qty = stock_qty + :qty, updated_at = NOW() ' +
+          'WHERE id = :product_id';
+        LQuery.ParamByName('qty').AsFloat := LItemsQuery.FieldByName('quantity').AsFloat;
+        LQuery.ParamByName('product_id').AsLargeInt := LItemsQuery.FieldByName('product_id').AsLargeInt;
+        LQuery.ExecSQL;
+        LItemsQuery.Next;
+      end;
+      LItemsQuery.Close;
+
+      LQuery.SQL.Text := 'DELETE FROM erp_order_items WHERE order_id = :order_id';
+      LQuery.ParamByName('order_id').AsLargeInt := AId;
+      LQuery.ExecSQL;
+
+      LLineNo := 1;
+      LTotal := 0;
+      for I := 0 to High(AInput.Items) do
+      begin
+        if AInput.Items[I].ProductId <= 0 then
+          raise Exception.CreateFmt('Item %d com produto invalido.', [I + 1]);
+        if AInput.Items[I].Quantity <= 0 then
+          raise Exception.CreateFmt('Item %d com quantidade invalida.', [I + 1]);
+
+        LQuery.SQL.Text :=
+          'SELECT unit_price, stock_qty FROM erp_products ' +
+          'WHERE id = :product_id AND is_active = TRUE ' +
+          'FOR UPDATE';
+        LQuery.ParamByName('product_id').AsLargeInt := AInput.Items[I].ProductId;
+        LQuery.Open;
+        if LQuery.IsEmpty then
+          raise Exception.CreateFmt('Produto %d nao encontrado ou inativo.', [AInput.Items[I].ProductId]);
+
+        LUnitPrice := LQuery.FieldByName('unit_price').AsFloat;
+        LStockQty := LQuery.FieldByName('stock_qty').AsFloat;
+        LQuery.Close;
+
+        if LStockQty < AInput.Items[I].Quantity then
+          raise Exception.CreateFmt(
+            'Estoque insuficiente para o produto %d. Disponivel: %.3f.',
+            [AInput.Items[I].ProductId, LStockQty]
+          );
+
+        LLineTotal := LUnitPrice * AInput.Items[I].Quantity;
+        LTotal := LTotal + LLineTotal;
+
+        LQuery.SQL.Text :=
+          'INSERT INTO erp_order_items (order_id, line_no, product_id, quantity, unit_price, line_total) ' +
+          'VALUES (:order_id, :line_no, :product_id, :quantity, :unit_price, :line_total)';
+        LQuery.ParamByName('order_id').AsLargeInt := AId;
+        LQuery.ParamByName('line_no').AsInteger := LLineNo;
+        LQuery.ParamByName('product_id').AsLargeInt := AInput.Items[I].ProductId;
+        LQuery.ParamByName('quantity').AsFloat := AInput.Items[I].Quantity;
+        LQuery.ParamByName('unit_price').AsFloat := LUnitPrice;
+        LQuery.ParamByName('line_total').AsFloat := LLineTotal;
+        LQuery.ExecSQL;
+
+        LQuery.SQL.Text :=
+          'UPDATE erp_products SET stock_qty = stock_qty - :qty, updated_at = NOW() ' +
+          'WHERE id = :product_id';
+        LQuery.ParamByName('qty').AsFloat := AInput.Items[I].Quantity;
+        LQuery.ParamByName('product_id').AsLargeInt := AInput.Items[I].ProductId;
+        LQuery.ExecSQL;
+
+        Inc(LLineNo);
+      end;
+
+      LQuery.SQL.Text :=
+        'UPDATE erp_orders SET client_id = :client_id, notes = :notes, total_amount = :total_amount WHERE id = :id';
+      LQuery.ParamByName('client_id').AsLargeInt := AInput.ClientId;
+      LQuery.ParamByName('notes').AsString := Trim(AInput.Notes);
+      LQuery.ParamByName('total_amount').AsFloat := LTotal;
+      LQuery.ParamByName('id').AsLargeInt := AId;
+      LQuery.ExecSQL;
+
+      LogOrderStatus(
+        LQuery,
+        AId,
+        LStatus,
+        LStatus,
+        'UPDATED',
+        'Pedido atualizado.',
+        AInput.UpdatedByUserId
+      );
+
+      LConnection.Commit;
+      Result := True;
+    except
+      LConnection.Rollback;
+      raise;
+    end;
+  finally
+    LItemsQuery.Free;
+    LQuery.Free;
+    LConnection.Free;
+  end;
+end;
+
+class function TOrderService.ConfirmOrder(const AId: Int64; const AUserId: Int64): Boolean;
 var
   LConnection: TFDConnection;
   LQuery: TFDQuery;
@@ -457,20 +760,32 @@ begin
         Exit(False);
       end;
 
-      LStatus := UpperCase(LQuery.FieldByName('status').AsString);
+      LStatus := NormalizeOrderStatus(LQuery.FieldByName('status').AsString);
       LQuery.Close;
       if LStatus = 'CONFIRMED' then
       begin
         LConnection.Rollback;
         Exit(False);
       end;
-      if LStatus <> 'OPEN' then
-        raise Exception.Create('Apenas pedidos em aberto podem ser confirmados.');
+      if not CanConfirmOrderStatus(LStatus) then
+        raise Exception.CreateFmt(
+          'Status atual (%s) nao permite aprovacao. Permitidos: OPEN/AWAITING_APPROVAL/PENDING_APPROVAL.',
+          [LStatus]
+        );
 
       LQuery.SQL.Text :=
         'UPDATE erp_orders SET status = ''CONFIRMED'', confirmed_at = NOW() WHERE id = :id';
       LQuery.ParamByName('id').AsLargeInt := AId;
       LQuery.ExecSQL;
+      LogOrderStatus(
+        LQuery,
+        AId,
+        LStatus,
+        'CONFIRMED',
+        'CONFIRMED',
+        'Pedido aprovado.',
+        AUserId
+      );
 
       LConnection.Commit;
       Result := True;
@@ -484,7 +799,7 @@ begin
   end;
 end;
 
-class function TOrderService.InvoiceOrder(const AId: Int64; const AInput: TInvoiceInput): Boolean;
+class function TOrderService.InvoiceOrder(const AId: Int64; const AInput: TInvoiceInput; const AUserId: Int64): Boolean;
 var
   LConnection: TFDConnection;
   LQuery: TFDQuery;
@@ -518,17 +833,20 @@ begin
         Exit(False);
       end;
 
-      LStatus := UpperCase(LQuery.FieldByName('status').AsString);
+      LStatus := NormalizeOrderStatus(LQuery.FieldByName('status').AsString);
       LClientId := LQuery.FieldByName('client_id').AsLargeInt;
       LTotalAmount := LQuery.FieldByName('total_amount').AsFloat;
       LQuery.Close;
-      if LStatus = 'INVOICED' then
+      if IsInvoicedOrderStatus(LStatus) then
       begin
         LConnection.Rollback;
         Exit(False);
       end;
-      if not ((LStatus = 'OPEN') or (LStatus = 'CONFIRMED')) then
-        raise Exception.Create('Apenas pedidos em aberto ou confirmados podem ser faturados.');
+      if not CanInvoiceOrderStatus(LStatus) then
+        raise Exception.CreateFmt(
+          'Status atual (%s) nao permite faturamento.',
+          [LStatus]
+        );
 
       LPaymentTerm := UpperCase(Trim(AInput.PaymentTerm));
       if LPaymentTerm = '' then
@@ -568,6 +886,15 @@ begin
       LQuery.ParamByName('invoice_number').AsString := Trim(AInput.InvoiceNumber);
       LQuery.ParamByName('id').AsLargeInt := AId;
       LQuery.ExecSQL;
+      LogOrderStatus(
+        LQuery,
+        AId,
+        LStatus,
+        'INVOICED',
+        'INVOICED',
+        'Pedido faturado.',
+        AUserId
+      );
 
       LQuery.SQL.Text :=
         'SELECT COUNT(*) AS total ' +
@@ -643,12 +970,13 @@ begin
   end;
 end;
 
-class function TOrderService.CancelOrder(const AId: Int64): Boolean;
+class function TOrderService.CancelOrder(const AId: Int64; const AUserId: Int64): Boolean;
 var
   LConnection: TFDConnection;
   LOrderQuery: TFDQuery;
   LItemsQuery: TFDQuery;
   LUpdateQuery: TFDQuery;
+  LStatus: string;
 begin
   Result := False;
   LConnection := TConnectionFactory.NewConnection;
@@ -668,12 +996,13 @@ begin
         LConnection.Rollback;
         Exit(False);
       end;
-      if SameText(LOrderQuery.FieldByName('status').AsString, 'CANCELED') then
+      LStatus := NormalizeOrderStatus(LOrderQuery.FieldByName('status').AsString);
+      if IsCanceledOrderStatus(LStatus) then
       begin
         LConnection.Rollback;
         Exit(False);
       end;
-      if SameText(LOrderQuery.FieldByName('status').AsString, 'INVOICED') then
+      if IsInvoicedOrderStatus(LStatus) then
         raise Exception.Create('Pedido faturado nao pode ser cancelado.');
       LOrderQuery.Close;
 
@@ -701,6 +1030,15 @@ begin
         'UPDATE erp_orders SET status = ''CANCELED'', canceled_at = NOW() WHERE id = :id';
       LUpdateQuery.ParamByName('id').AsLargeInt := AId;
       LUpdateQuery.ExecSQL;
+      LogOrderStatus(
+        LUpdateQuery,
+        AId,
+        LStatus,
+        'CANCELED',
+        'CANCELED',
+        'Pedido cancelado.',
+        AUserId
+      );
 
       LConnection.Commit;
       Result := True;
