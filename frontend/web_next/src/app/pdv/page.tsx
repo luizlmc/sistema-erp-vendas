@@ -490,15 +490,11 @@ export default function PdvPage() {
           </div>
         </section>
 
-        <div className="pointer-events-none fixed right-5 top-5 z-[95] flex w-[380px] max-w-[calc(100vw-24px)] flex-col gap-2.5">
+        <div className="erp-toast-stack">
           {toasts.map((t) => (
             <div
               key={t.id}
-              className={`pointer-events-auto rounded-md border px-4 py-3 text-[14px] shadow-[0_12px_30px_rgba(0,0,0,0.35)] ${
-                t.type === "success"
-                  ? "border-[#166534] bg-[#123127] text-[#86efac]"
-                  : "border-[#7f1d1d] bg-[#2d1518] text-[#fca5a5]"
-              }`}
+              className={`erp-toast ${t.type === "success" ? "erp-toast-success" : "erp-toast-error"}`}
             >
               {t.msg}
             </div>

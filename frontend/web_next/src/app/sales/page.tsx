@@ -1839,8 +1839,8 @@ export default function SalesPage() {
         </div>
       ) : null}
 
-      <div className="pointer-events-none fixed right-5 top-5 z-[95] flex w-[380px] max-w-[calc(100vw-24px)] flex-col gap-2.5">
-        {toasts.map((toastItem) => <div className={`pointer-events-auto rounded-md border px-4 py-3 text-[14px] shadow-[0_12px_30px_rgba(0,0,0,0.35)] transition-all duration-300 ${toastItem.type === "success" ? "border-[#166534] bg-[#123127] text-[#86efac]" : "border-[#7f1d1d] bg-[#2d1518] text-[#fca5a5]"}`} key={toastItem.id}>{toastItem.message}</div>)}
+      <div className="erp-toast-stack">
+        {toasts.map((toastItem) => <div className={`erp-toast ${toastItem.type === "success" ? "erp-toast-success" : "erp-toast-error"}`} key={toastItem.id}>{toastItem.message}</div>)}
       </div>
     </ErpShell>
   );

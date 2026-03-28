@@ -301,6 +301,22 @@ a {
     border-color: #3a4260;
     background-color: #253049;
   }
+
+  .erp-toast-stack {
+    @apply pointer-events-none fixed right-5 top-5 z-[95] flex w-[380px] max-w-[calc(100vw-24px)] flex-col gap-2.5;
+  }
+
+  .erp-toast {
+    @apply pointer-events-auto rounded-md border px-4 py-3 text-[14px] shadow-[0_12px_30px_rgba(0,0,0,0.35)];
+  }
+
+  .erp-toast-success {
+    @apply border-[#166534] bg-[#123127] text-[#86efac];
+  }
+
+  .erp-toast-error {
+    @apply border-[#7f1d1d] bg-[#2d1518] text-[#fca5a5];
+  }
 }
 
 /* Theme light overrides for pages still using dark utility tokens */
@@ -497,4 +513,16 @@ a {
 .theme-light .erp-list-action-btn:hover {
   border-color: #b0bcce !important;
   background-color: #e2e8f0 !important;
+}
+
+.theme-light .erp-toast-success {
+  border-color: #15803d !important;
+  background-color: #dcfce7 !important;
+  color: #166534 !important;
+}
+
+.theme-light .erp-toast-error {
+  border-color: #fca5a5 !important;
+  background-color: #fee2e2 !important;
+  color: #991b1b !important;
 }

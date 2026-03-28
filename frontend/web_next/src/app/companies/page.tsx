@@ -613,9 +613,9 @@ export default function CompaniesPage() {
         </div>
       ) : null}
 
-      <div className="fixed right-5 top-5 z-[90] flex w-[340px] flex-col gap-2">
+      <div className="erp-toast-stack">
         {toasts.map((item) => (
-          <div key={item.id} className={`rounded border px-4 py-3 text-sm shadow-lg ${item.type === "success" ? "border-[#166534] bg-[#14532d] text-[#dcfce7]" : "border-[#991b1b] bg-[#7f1d1d] text-[#fee2e2]"}`}>
+          <div key={item.id} className={`erp-toast ${item.type === "success" ? "erp-toast-success" : "erp-toast-error"}`}>
             {item.message}
           </div>
         ))}
