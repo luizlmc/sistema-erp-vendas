@@ -12,11 +12,26 @@ Garantir rastreabilidade e regras de status em todo o ciclo comercial.
 - Historicos: order/quote history
 
 ## Regras de Implementacao
-- Acoes habilitadas conforme status.
-- Timeline mostra apenas eventos reais.
-- Conversao orcamento -> pedido com rastreio.
+- Acoes sempre habilitadas por matriz de estado (nunca por regra solta na tela).
+- Timeline mostra apenas eventos reais com data/hora e usuario quando houver.
+- Conversao orcamento -> pedido com rastreio de origem obrigatorio.
+- Pedido cancelado nao pode aprovar/faturar/emitir.
+- Pedido faturado nao pode aprovar novamente.
+- Orcamento convertido nao pode ser convertido novamente.
+
+## Matriz minima de acoes
+- Orcamento:
+  - DRAFTING/PENDING: abrir, editar, aprovar, reprovar, cancelar, converter
+  - APPROVED: abrir, converter, cancelar
+  - REJECTED/CANCELED/CONVERTED: abrir
+- Pedido:
+  - OPEN/AWAITING_APPROVAL: abrir, editar, aprovar, cancelar
+  - APPROVED/PARTIALLY_FULFILLED: abrir, faturar, emitir fiscal, cancelar (quando permitido)
+  - INVOICED/PARTIALLY_INVOICED: abrir, emitir fiscal
+  - CANCELED: abrir
 
 ## Checklist
 - Cenarios comerciais principais funcionando.
 - Detalhamento consistente (timeline/anexos/obs).
 - Sem regressao em filtros e paginacao.
+- Botoes do detalhe respeitando status atual em 100% dos casos.

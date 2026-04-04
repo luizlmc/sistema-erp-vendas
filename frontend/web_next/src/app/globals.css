@@ -244,8 +244,12 @@ a {
     @apply border-[#3b82f6] bg-[#1e3a5f] text-[#e2e8f0];
   }
 
+  .erp-sort-group {
+    @apply ml-auto inline-flex items-center gap-2;
+  }
+
   .erp-sort-label {
-    @apply ml-auto font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b];
+    @apply font-mono text-[11px] uppercase tracking-[0.14em] text-[#64748b];
   }
 
   .erp-tag {

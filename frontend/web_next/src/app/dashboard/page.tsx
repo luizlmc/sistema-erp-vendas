@@ -277,8 +277,13 @@ export default function DashboardPage() {
   const textSub = isLight ? "text-[#64748b]" : "text-[#64748b]";
   const gridLine = isLight ? "border-[#d1d9e6]" : "border-[#2a3045]";
 
+  function handleLogout() {
+    clearSession();
+    router.replace("/");
+  }
+
   return (
-    <ErpShell activeNav="dashboard" onLogout={() => {}} pageTitle="Dashboard Executivo">
+    <ErpShell activeNav="dashboard" onLogout={handleLogout} pageTitle="Dashboard Executivo">
       {loading ? (
         <div className={`rounded-md border p-6 ${panelClass} ${textSub}`}>Carregando dashboard...</div>
       ) : error ? (

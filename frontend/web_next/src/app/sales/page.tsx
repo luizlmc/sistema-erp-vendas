@@ -988,6 +988,40 @@ export default function SalesPage() {
       });
   }, [quoteDetail, quoteHistory]);
 
+  const createClientName = useMemo(() => {
+    const selectedId = Number(createClientId);
+    if (!Number.isFinite(selectedId) || selectedId <= 0) return "Selecione um cliente";
+    return clients.find((client) => client.id === selectedId)?.name || "Cliente selecionado";
+  }, [clients, createClientId]);
+
+  const createItemsPreview = useMemo(
+    () =>
+      createItems.map((item) => {
+        const selectedId = Number(item.productId);
+        const product = products.find((candidate) => candidate.id === selectedId) || null;
+        const qty = Math.max(0, toNumber(item.qty));
+        const unitPrice = product?.unit_price || 0;
+        return {
+          id: item.id,
+          product,
+          qty,
+          unitPrice,
+          lineTotal: qty * unitPrice,
+        };
+      }),
+    [createItems, products],
+  );
+
+  const createSubtotal = useMemo(
+    () => createItemsPreview.reduce((acc, item) => acc + item.lineTotal, 0),
+    [createItemsPreview],
+  );
+
+  const createValidItemsCount = useMemo(
+    () => createItemsPreview.filter((item) => item.product && item.qty > 0).length,
+    [createItemsPreview],
+  );
+
   const currentAttachments = activeDetailKey ? detailAttachments[activeDetailKey] ?? [] : [];
 
   function normalizeQuoteHistory(payload: unknown): QuoteHistoryItem[] {
@@ -1461,10 +1495,12 @@ export default function SalesPage() {
 
               <button className={`erp-filter-btn ${showFilters ? "erp-filter-btn-on" : "erp-filter-btn-off"}`} onClick={() => setShowFilters((s) => !s)} type="button"><span className="material-symbols-outlined !text-[17px]">filter_alt</span>Filtros</button>
 
-              <span className="erp-sort-label">Ordenar por:</span>
-              <select className="erp-list-sort-select outline-none focus:border-[#3b82f6]" onChange={(event) => setSortBy(event.target.value as SortBy)} value={sortBy}>
-                <option value="recent">Mais recente</option><option value="amount_desc">Maior valor</option><option value="amount_asc">Menor valor</option><option value="name_asc">Nome A-Z</option><option value="name_desc">Nome Z-A</option>
-              </select>
+              <div className="erp-sort-group">
+                <span className="erp-sort-label">Ordenar por:</span>
+                <select className="erp-list-sort-select outline-none focus:border-[#3b82f6]" onChange={(event) => setSortBy(event.target.value as SortBy)} value={sortBy}>
+                  <option value="recent">Mais recente</option><option value="amount_desc">Maior valor</option><option value="amount_asc">Menor valor</option><option value="name_asc">Nome A-Z</option><option value="name_desc">Nome Z-A</option>
+                </select>
+              </div>
             </div>
 
             {showFilters ? (
@@ -1604,18 +1640,205 @@ export default function SalesPage() {
 
       {createOpen ? (
         <div className="fixed inset-0 z-[70] grid place-items-center bg-black/70 p-4">
-          <div className="h-[86vh] w-[min(900px,98vw)] overflow-hidden rounded-md border border-[#2a3045] bg-[#0f1117] shadow-2xl">
+          <div
+            className={`h-[86vh] w-[min(1080px,98vw)] overflow-hidden rounded-md border shadow-2xl ${
+              isLight ? "border-[#d1d9e6] bg-[#f8fafc]" : "border-[#2a3045] bg-[#0f1117]"
+            }`}
+          >
             <div className="flex h-full flex-col">
-              <div className="flex items-start gap-2 border-b border-[#2a3045] px-5 py-4">
-                <div><h2 className="text-[16px] font-semibold text-[#e2e8f0]">{createMode === "order" ? (editingOrderId ? `Editar venda #${editingOrderId}` : "Nova venda") : editingQuoteId ? `Editar orcamento #${editingQuoteId}` : "Novo orcamento"}</h2><p className="mt-1 font-mono text-[11px] text-[#64748b]">{createMode === "order" ? "Pedido comercial" : "Orcamento comercial"}</p></div>
-                <div className="ml-auto flex gap-2"><button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={() => { setCreateOpen(false); setEditingOrderId(null); setEditingQuoteId(null); }} type="button">Cancelar</button><button className="rounded border border-[#166534] bg-[#14532d] px-4 py-2 text-sm text-[#86efac]" form="create-sales-form" type="submit">{creating ? "Salvando..." : "Salvar"}</button></div>
+              <div
+                className={`flex items-start gap-2 border-b px-5 py-4 ${
+                  isLight ? "border-[#d1d9e6]" : "border-[#2a3045]"
+                }`}
+              >
+                <div>
+                  <h2 className={`text-[17px] font-semibold ${isLight ? "text-[#0f172a]" : "text-[#e2e8f0]"}`}>
+                    {createMode === "order"
+                      ? editingOrderId
+                        ? `Editar venda #${editingOrderId}`
+                        : "Nova venda"
+                      : editingQuoteId
+                        ? `Editar orcamento #${editingQuoteId}`
+                        : "Novo orcamento"}
+                  </h2>
+                  <p className="mt-1 font-mono text-[11px] text-[#64748b]">
+                    {createMode === "order" ? "Pedido comercial" : "Orcamento comercial"}
+                  </p>
+                </div>
+                <div className="ml-auto flex gap-2">
+                  <button
+                    className="erp-btn erp-btn-secondary"
+                    onClick={() => {
+                      setCreateOpen(false);
+                      setEditingOrderId(null);
+                      setEditingQuoteId(null);
+                    }}
+                    type="button"
+                  >
+                    Cancelar
+                  </button>
+                  <button className="erp-btn erp-btn-success" form="create-sales-form" type="submit">
+                    {creating ? "Salvando..." : "Salvar"}
+                  </button>
+                </div>
               </div>
-              <form className="flex-1 space-y-3 overflow-y-auto p-4" id="create-sales-form" onSubmit={submitCreate}>
-                <label className="grid gap-1 text-xs text-[#64748b]">Cliente *
-                  <select className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[13px] text-[#e2e8f0] outline-none focus:border-[#3b82f6]" onChange={(event) => setCreateClientId(event.target.value)} value={createClientId}><option value="">Selecione...</option>{clients.map((client) => <option key={client.id} value={String(client.id)}>{client.name}</option>)}</select>
-                </label>
-                {createItems.map((item, index) => <div className="grid grid-cols-[1.7fr_130px_44px] gap-2" key={item.id}><label className="grid gap-1 text-xs text-[#64748b]">Produto {index + 1} *<select className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[13px] text-[#e2e8f0] outline-none focus:border-[#3b82f6]" onChange={(event) => updateCreateItem(item.id, "productId", event.target.value)} value={item.productId}><option value="">Selecione...</option>{products.map((product) => <option key={product.id} value={String(product.id)}>{product.sku} - {product.name}</option>)}</select></label><label className="grid gap-1 text-xs text-[#64748b]">Qtd *<input className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[13px] text-[#e2e8f0] outline-none focus:border-[#3b82f6]" onChange={(event) => updateCreateItem(item.id, "qty", event.target.value)} value={item.qty} /></label><div className="flex items-end"><button className="h-10 w-11 rounded border border-[#2a3045] bg-[#1e2332] text-[#94a3b8] transition hover:border-[#3a4260] hover:text-[#e2e8f0]" onClick={() => removeCreateItem(item.id)} type="button"><span className="material-symbols-outlined !text-[17px]">delete</span></button></div></div>)}
-                <button className="h-10 w-full rounded border border-dashed border-[#3a4260] bg-[#161a24] text-sm text-[#94a3b8] transition hover:border-[#64748b] hover:text-[#e2e8f0]" onClick={addCreateItem} type="button">+ Adicionar item</button>
+              <form className="min-h-0 flex-1 overflow-y-auto p-4" id="create-sales-form" onSubmit={submitCreate}>
+                <div className="grid gap-4 xl:grid-cols-[1.65fr_1fr]">
+                  <section
+                    className={`rounded-md border p-4 ${
+                      isLight ? "border-[#d1d9e6] bg-[#ffffff]" : "border-[#2a3045] bg-[#111827]"
+                    }`}
+                  >
+                    <label className="grid gap-1 text-xs text-[#64748b]">
+                      Cliente *
+                      <select
+                        className={`h-10 rounded border px-3 text-[13px] outline-none focus:border-[#3b82f6] ${
+                          isLight
+                            ? "border-[#d1d9e6] bg-[#f8fafc] text-[#0f172a]"
+                            : "border-[#2a3045] bg-[#1e2332] text-[#e2e8f0]"
+                        }`}
+                        onChange={(event) => setCreateClientId(event.target.value)}
+                        value={createClientId}
+                      >
+                        <option value="">Selecione...</option>
+                        {clients.map((client) => (
+                          <option key={client.id} value={String(client.id)}>
+                            {client.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="mt-4 space-y-2">
+                      {createItems.map((item, index) => (
+                        <div className="grid grid-cols-[1.6fr_110px_44px] gap-2" key={item.id}>
+                          <label className="grid gap-1 text-xs text-[#64748b]">
+                            Produto {index + 1} *
+                            <select
+                              className={`h-10 rounded border px-3 text-[13px] outline-none focus:border-[#3b82f6] ${
+                                isLight
+                                  ? "border-[#d1d9e6] bg-[#f8fafc] text-[#0f172a]"
+                                  : "border-[#2a3045] bg-[#1e2332] text-[#e2e8f0]"
+                              }`}
+                              onChange={(event) => updateCreateItem(item.id, "productId", event.target.value)}
+                              value={item.productId}
+                            >
+                              <option value="">Selecione...</option>
+                              {products.map((product) => (
+                                <option key={product.id} value={String(product.id)}>
+                                  {product.sku} - {product.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="grid gap-1 text-xs text-[#64748b]">
+                            Qtd *
+                            <input
+                              className={`h-10 rounded border px-3 text-[13px] outline-none focus:border-[#3b82f6] ${
+                                isLight
+                                  ? "border-[#d1d9e6] bg-[#f8fafc] text-[#0f172a]"
+                                  : "border-[#2a3045] bg-[#1e2332] text-[#e2e8f0]"
+                              }`}
+                              onChange={(event) => updateCreateItem(item.id, "qty", event.target.value)}
+                              value={item.qty}
+                            />
+                          </label>
+                          <div className="flex items-end">
+                            <button
+                              className={`h-10 w-11 rounded border transition ${
+                                isLight
+                                  ? "border-[#d1d9e6] bg-[#f8fafc] text-[#475569] hover:border-[#94a3b8] hover:text-[#0f172a]"
+                                  : "border-[#2a3045] bg-[#1e2332] text-[#94a3b8] hover:border-[#3a4260] hover:text-[#e2e8f0]"
+                              }`}
+                              disabled={createItems.length <= 1}
+                              onClick={() => removeCreateItem(item.id)}
+                              type="button"
+                            >
+                              <span className="material-symbols-outlined !text-[17px]">delete</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      className={`mt-2 h-10 w-full rounded border border-dashed text-sm transition ${
+                        isLight
+                          ? "border-[#94a3b8] bg-[#f8fafc] text-[#475569] hover:border-[#64748b] hover:text-[#0f172a]"
+                          : "border-[#3a4260] bg-[#161a24] text-[#94a3b8] hover:border-[#64748b] hover:text-[#e2e8f0]"
+                      }`}
+                      onClick={addCreateItem}
+                      type="button"
+                    >
+                      + Adicionar item
+                    </button>
+                  </section>
+
+                  <aside
+                    className={`h-fit rounded-md border p-4 ${
+                      isLight ? "border-[#d1d9e6] bg-[#ffffff]" : "border-[#2a3045] bg-[#111827]"
+                    }`}
+                  >
+                    <h3 className={`text-[13px] font-semibold uppercase tracking-[0.08em] ${isLight ? "text-[#334155]" : "text-[#94a3b8]"}`}>
+                      Resumo da venda
+                    </h3>
+                    <div className="mt-3 space-y-2">
+                      <div
+                        className={`rounded border px-3 py-2 ${
+                          isLight ? "border-[#d1d9e6] bg-[#f8fafc]" : "border-[#2a3045] bg-[#161a24]"
+                        }`}
+                      >
+                        <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Cliente</p>
+                        <p className={`mt-1 text-[13px] font-semibold ${isLight ? "text-[#0f172a]" : "text-[#e2e8f0]"}`}>
+                          {createClientName}
+                        </p>
+                      </div>
+                      <div
+                        className={`rounded border px-3 py-2 ${
+                          isLight ? "border-[#d1d9e6] bg-[#f8fafc]" : "border-[#2a3045] bg-[#161a24]"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-[11px] text-[#64748b]">Itens validos</span>
+                          <span className={`font-mono text-[13px] font-semibold ${isLight ? "text-[#0f172a]" : "text-[#e2e8f0]"}`}>
+                            {createValidItemsCount}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between">
+                          <span className="font-mono text-[11px] text-[#64748b]">Subtotal</span>
+                          <span className="font-mono text-[14px] font-semibold text-[#22c55e]">{brl(createSubtotal)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3">
+                      <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Itens selecionados</p>
+                      <div
+                        className={`max-h-[270px] overflow-y-auto rounded border ${
+                          isLight ? "border-[#d1d9e6] bg-[#f8fafc]" : "border-[#2a3045] bg-[#161a24]"
+                        }`}
+                      >
+                        {createItemsPreview.length === 0 ? (
+                          <p className="px-3 py-2 text-[12px] text-[#64748b]">Nenhum item adicionado.</p>
+                        ) : (
+                          <ul className="divide-y divide-[#2a3045]">
+                            {createItemsPreview.map((item, index) => (
+                              <li className="px-3 py-2" key={item.id}>
+                                <p className={`line-clamp-1 text-[12px] font-semibold ${isLight ? "text-[#0f172a]" : "text-[#e2e8f0]"}`}>
+                                  {item.product ? `${item.product.sku} - ${item.product.name}` : `Produto ${index + 1} nao selecionado`}
+                                </p>
+                                <div className="mt-1 flex items-center justify-between font-mono text-[11px] text-[#64748b]">
+                                  <span>Qtd: {item.qty.toLocaleString("pt-BR")}</span>
+                                  <span>{brl(item.lineTotal)}</span>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
+                  </aside>
+                </div>
               </form>
             </div>
           </div>
@@ -1636,14 +1859,14 @@ export default function SalesPage() {
                   <p className="mt-1 font-mono text-[11px] text-[#64748b]">{detail.client_name} · {dmy(detail.created_at)}</p>
                 </div>
                 <div className="ml-auto flex gap-2">
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={busyId === detail.id || currentOrderStatus.includes("INVOICED") || currentOrderStatus.includes("CANCEL")} onClick={() => currentOrderListItem && openEditOrder(currentOrderListItem)} type="button">Editar</button>
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "confirm", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "confirm")} type="button">Aprovar</button>
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "invoice", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "invoice")} type="button">Faturar</button>
-                  <button className="rounded border border-[#166534] bg-[#14532d] px-3 py-2 text-sm text-[#86efac] hover:border-[#15803d] disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "emit", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "emit")} type="button">Emitir fiscal</button>
-                  <button className="rounded border border-[#7f1d1d] bg-[#3a1519] px-3 py-2 text-sm text-[#fca5a5] hover:border-[#991b1b] disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "cancel", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "cancel")} type="button">Cancelar</button>
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={openProfessionalReport} type="button">Relatorio</button>
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={printCurrentDetail} type="button">Imprimir</button>
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={() => { setDetail(null); setOrderHistory([]); }} type="button">Fechar</button>
+                  <button className="erp-btn erp-btn-secondary disabled:opacity-40" disabled={busyId === detail.id || currentOrderStatus.includes("INVOICED") || currentOrderStatus.includes("CANCEL")} onClick={() => currentOrderListItem && openEditOrder(currentOrderListItem)} type="button">Editar</button>
+                  <button className="erp-btn erp-btn-secondary disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "confirm", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "confirm")} type="button">Aprovar</button>
+                  <button className="erp-btn erp-btn-secondary disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "invoice", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "invoice")} type="button">Faturar</button>
+                  <button className="erp-btn erp-btn-success disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "emit", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "emit")} type="button">Emitir fiscal</button>
+                  <button className="erp-btn erp-btn-danger disabled:opacity-40" disabled={busyId === detail.id || !canOrderAction(currentOrderStatus, "cancel", currentOrderHasFiscal)} onClick={() => runOrderAction(detail.id, "cancel")} type="button">Cancelar</button>
+                  <button className="erp-btn erp-btn-secondary" onClick={openProfessionalReport} type="button">Relatorio</button>
+                  <button className="erp-btn erp-btn-secondary" onClick={printCurrentDetail} type="button">Imprimir</button>
+                  <button className="erp-btn erp-btn-secondary" onClick={() => { setDetail(null); setOrderHistory([]); }} type="button">Fechar</button>
                 </div>
               </div>
               <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 lg:grid-cols-[1.75fr_1fr]">
@@ -1756,27 +1979,27 @@ export default function SalesPage() {
                   </p>
                 </div>
                 <div className="ml-auto flex gap-2">
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "approve")} onClick={() => quoteDetail && runQuoteAction(quoteDetail.id, "approve")} type="button">Aprovar</button>
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "reject")} onClick={() => quoteDetail && runQuoteAction(quoteDetail.id, "reject")} type="button">Reprovar</button>
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "cancel")} onClick={() => quoteDetail && runQuoteAction(quoteDetail.id, "cancel")} type="button">Cancelar</button>
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-sm text-[#e2e8f0] hover:border-[#3a4260] disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || quoteDetail.status === "CONVERTED" || quoteDetail.status === "CANCELED"} onClick={() => quoteDetail && openEditQuote({ id: quoteDetail.id, code: quoteDetail.code, client_id: quoteDetail.client_id, client_name: quoteDetail.client_name, status: quoteDetail.status, total_amount: quoteDetail.total_amount, items_count: quoteDetail.items.length, linked_order_id: quoteDetail.linked_order_id, created_at: quoteDetail.created_at })} type="button">Editar</button>
-                  <button className="rounded border border-[#166534] bg-[#14532d] px-3 py-2 text-sm text-[#86efac] hover:border-[#15803d] disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "convert", quoteDetail.linked_order_id)} onClick={() => quoteDetail && convertQuoteToOrder(quoteDetail.id)} type="button">Converter</button>
+                  <button className="erp-btn erp-btn-secondary disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "approve")} onClick={() => quoteDetail && runQuoteAction(quoteDetail.id, "approve")} type="button">Aprovar</button>
+                  <button className="erp-btn erp-btn-secondary disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "reject")} onClick={() => quoteDetail && runQuoteAction(quoteDetail.id, "reject")} type="button">Reprovar</button>
+                  <button className="erp-btn erp-btn-danger disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "cancel")} onClick={() => quoteDetail && runQuoteAction(quoteDetail.id, "cancel")} type="button">Cancelar</button>
+                  <button className="erp-btn erp-btn-secondary disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || quoteDetail.status === "CONVERTED" || quoteDetail.status === "CANCELED"} onClick={() => quoteDetail && openEditQuote({ id: quoteDetail.id, code: quoteDetail.code, client_id: quoteDetail.client_id, client_name: quoteDetail.client_name, status: quoteDetail.status, total_amount: quoteDetail.total_amount, items_count: quoteDetail.items.length, linked_order_id: quoteDetail.linked_order_id, created_at: quoteDetail.created_at })} type="button">Editar</button>
+                  <button className="erp-btn erp-btn-success disabled:opacity-40" disabled={!quoteDetail || busyId === quoteDetail.id || !canQuoteAction(quoteDetail.status, "convert", quoteDetail.linked_order_id)} onClick={() => quoteDetail && convertQuoteToOrder(quoteDetail.id)} type="button">Converter</button>
                   <button
-                    className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]"
+                    className="erp-btn erp-btn-secondary"
                     onClick={openProfessionalReport}
                     type="button"
                   >
                     Relatorio
                   </button>
                   <button
-                    className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]"
+                    className="erp-btn erp-btn-secondary"
                     onClick={printCurrentDetail}
                     type="button"
                   >
                     Imprimir
                   </button>
                   <button
-                    className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]"
+                    className="erp-btn erp-btn-secondary"
                     onClick={() => {
                       setQuoteDetail(null);
                       setQuoteHistory([]);

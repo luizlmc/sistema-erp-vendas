@@ -122,7 +122,7 @@ function Sidebar({
   );
 }
 
-export function ErpShell({ activeNav, children }: ErpShellProps) {
+export function ErpShell({ activeNav, children, onLogout }: ErpShellProps) {
   const [clock, setClock] = useState("");
   const [mobileMenu, setMobileMenu] = useState(false);
   const [pageBootLoading, setPageBootLoading] = useState(true);
@@ -202,6 +202,18 @@ export function ErpShell({ activeNav, children }: ErpShellProps) {
             type="button"
           >
             <span className="material-symbols-outlined !text-[18px]">settings</span>
+          </button>
+          <button
+            className={`inline-flex h-8 w-8 items-center justify-center rounded border transition ${
+              resolvedIsLight
+                ? "border-[#d1d9e6] bg-[#eef1f7] text-[#475569] hover:border-[#b0bcce] hover:text-[#0f172a]"
+                : "border-[#2a3045] bg-[#1e2332] text-[#94a3b8] hover:border-[#3a4260] hover:text-[#e2e8f0]"
+            }`}
+            onClick={onLogout}
+            title="Sair"
+            type="button"
+          >
+            <span className="material-symbols-outlined !text-[18px]">logout</span>
           </button>
         </div>
       </header>

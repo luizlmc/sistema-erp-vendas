@@ -2,6 +2,23 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
   "http://127.0.0.1:9000";
 
+const API_BASE_FALLBACKS = Array.from(
+  new Set(
+    [
+      API_BASE_URL,
+      API_BASE_URL.includes("127.0.0.1")
+        ? API_BASE_URL.replace("127.0.0.1", "localhost")
+        : API_BASE_URL.includes("localhost")
+          ? API_BASE_URL.replace("localhost", "127.0.0.1")
+          : "",
+      "http://127.0.0.1:9000",
+      "http://localhost:9000",
+    ].filter(Boolean),
+  ),
+);
+
+const API_PROXY_BASE = "/api/proxy";
+
 type ApiErrorPayload = {
   message?: string;
 };
@@ -545,13 +562,28 @@ async function parseJson<T>(response: Response): Promise<T> {
 }
 
 async function apiFetch(path: string, init: RequestInit): Promise<Response> {
-  try {
-    return await fetch(`${API_BASE_URL}${path}`, init);
-  } catch {
-    throw new Error(
-      `API indisponivel em ${API_BASE_URL}. Inicie o backend (SistemaERPVendas.exe) e tente novamente.`,
-    );
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+
+  if (typeof window !== "undefined") {
+    try {
+      return await fetch(`${API_PROXY_BASE}${normalizedPath}`, init);
+    } catch {
+      // fallback direto abaixo
+    }
   }
+
+  let lastError: unknown;
+  for (const base of API_BASE_FALLBACKS) {
+    try {
+      return await fetch(`${base}${normalizedPath}`, init);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  const allBases = API_BASE_FALLBACKS.join(", ");
+  throw new Error(
+    `API indisponivel. Bases testadas: ${allBases}. Inicie o backend (SistemaERPVendas.exe) e tente novamente.`,
+  );
 }
 
 function withAuthHeaders(accessToken: string): HeadersInit {

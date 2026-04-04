@@ -105,6 +105,7 @@ export default function ReceivablesPage() {
   const [notes, setNotes] = useState("");
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: "success" | "error" }>>([]);
   const [filtersHydrated, setFiltersHydrated] = useState(false);
+  const [detailRefreshing, setDetailRefreshing] = useState(false);
 
   function toast(message: string, type: "success" | "error") {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -268,6 +269,25 @@ export default function ReceivablesPage() {
     }
   }
 
+  async function refreshDetail() {
+    if (!selected) return;
+    const token = getAccessToken();
+    if (!token) return;
+    try {
+      setDetailRefreshing(true);
+      const payload = await getReceivableRequest(token, selected.id);
+      setSelected(payload);
+      if (payload.balance_amount > 0) {
+        setAmount(String(payload.balance_amount.toFixed(2)).replace(".", ","));
+      }
+      toast("Titulo atualizado.", "success");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Falha ao atualizar titulo.", "error");
+    } finally {
+      setDetailRefreshing(false);
+    }
+  }
+
   async function submitPayment(event: FormEvent) {
     event.preventDefault();
     if (!selected || submitting) return;
@@ -381,22 +401,24 @@ export default function ReceivablesPage() {
                 Filtros
               </button>
 
-              <span className="erp-sort-label">Ordenar por:</span>
-              <select
-                className="erp-list-sort-select"
-                onChange={(event) => {
-                  setPage(1);
-                  setSortBy(event.target.value as SortBy);
-                }}
-                value={sortBy}
-              >
-                <option value="due_asc">Vencimento (proximo)</option>
-                <option value="due_desc">Vencimento (distante)</option>
-                <option value="value_desc">Maior saldo</option>
-                <option value="value_asc">Menor saldo</option>
-                <option value="name_asc">Cliente A-Z</option>
-                <option value="name_desc">Cliente Z-A</option>
-              </select>
+              <div className="erp-sort-group">
+                <span className="erp-sort-label">Ordenar por:</span>
+                <select
+                  className="erp-list-sort-select"
+                  onChange={(event) => {
+                    setPage(1);
+                    setSortBy(event.target.value as SortBy);
+                  }}
+                  value={sortBy}
+                >
+                  <option value="due_asc">Vencimento (proximo)</option>
+                  <option value="due_desc">Vencimento (distante)</option>
+                  <option value="value_desc">Maior saldo</option>
+                  <option value="value_asc">Menor saldo</option>
+                  <option value="name_asc">Cliente A-Z</option>
+                  <option value="name_desc">Cliente Z-A</option>
+                </select>
+              </div>
             </div>
 
             {showFilters ? (
@@ -516,16 +538,29 @@ export default function ReceivablesPage() {
                     </span>
                   </span>
                   <div className="flex justify-end">
-                    <button
-                      className="erp-list-action-btn"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void openDetail(item.id);
-                      }}
-                      type="button"
-                    >
-                      Abrir
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        className="erp-list-action-btn"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void openDetail(item.id);
+                        }}
+                        type="button"
+                      >
+                        Abrir
+                      </button>
+                      <button
+                        className="erp-list-action-btn"
+                        disabled={item.status === "PAID" || item.status === "CANCELED"}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void openDetail(item.id);
+                        }}
+                        type="button"
+                      >
+                        Receber
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))
@@ -573,12 +608,16 @@ export default function ReceivablesPage() {
                   </h2>
                   <p className="mt-1 font-mono text-[11px] text-[#64748b]">{selected.client_name}</p>
                 </div>
-                <div className="ml-auto">
+                <div className="ml-auto flex gap-2">
                   <button
-                    className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8] hover:border-[#3a4260]"
-                    onClick={() => setSelected(null)}
+                    className="erp-btn erp-btn-secondary"
+                    disabled={detailRefreshing}
+                    onClick={() => void refreshDetail()}
                     type="button"
                   >
+                    {detailRefreshing ? "Atualizando..." : "Atualizar"}
+                  </button>
+                  <button className="erp-btn erp-btn-secondary" onClick={() => setSelected(null)} type="button">
                     Fechar
                   </button>
                 </div>

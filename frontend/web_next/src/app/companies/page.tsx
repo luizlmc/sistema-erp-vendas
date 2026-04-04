@@ -3,7 +3,19 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ErpShell } from "@/components/ErpShell";
-import { clearSession, getAccessToken } from "@/lib/session";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { clearSession, getAccessToken, getUserIdentity } from "@/lib/session";
 import {
   CompanyApiItem,
   CompanyCreatePayload,
@@ -18,7 +30,6 @@ type StatusFilter = "all" | "active" | "inactive";
 type RegimeFilter = "all" | "SN" | "LP" | "LR";
 type SortBy = "recent" | "name_asc" | "name_desc";
 type FieldErrors = Partial<Record<"code" | "cnpj" | "legalName" | "taxRegime" | "crt", string>>;
-type StatusDates = { inactivatedAt?: string; reactivatedAt?: string };
 
 type FormState = {
   code: string;
@@ -47,8 +58,6 @@ type FormState = {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
-  inactivatedAt: string;
-  reactivatedAt: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -78,8 +87,6 @@ const EMPTY_FORM: FormState = {
   isActive: true,
   createdAt: "",
   updatedAt: "",
-  inactivatedAt: "",
-  reactivatedAt: "",
 };
 
 const brl = (v: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v || 0);
@@ -96,7 +103,7 @@ const dmy = (value?: string | null, withTime = false) => {
   return `${datePart} ${timePart}`;
 };
 
-function toForm(company: CompanyApiItem, dates: StatusDates): FormState {
+function toForm(company: CompanyApiItem): FormState {
   return {
     code: company.code || "",
     cnpj: company.cnpj || "",
@@ -124,18 +131,15 @@ function toForm(company: CompanyApiItem, dates: StatusDates): FormState {
     isActive: company.is_active,
     createdAt: dmy(company.created_at, true),
     updatedAt: dmy(company.updated_at, true),
-    inactivatedAt: dates.inactivatedAt ? dmy(dates.inactivatedAt, true) : "",
-    reactivatedAt: dates.reactivatedAt ? dmy(dates.reactivatedAt, true) : "",
   };
 }
 
 export default function CompaniesPage() {
   const router = useRouter();
+  const user = getUserIdentity();
   const [items, setItems] = useState<CompanyApiItem[]>([]);
-  const [statusDates, setStatusDates] = useState<Record<number, StatusDates>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [togglingId, setTogglingId] = useState<number | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [regimeFilter, setRegimeFilter] = useState<RegimeFilter>("all");
@@ -152,6 +156,8 @@ export default function CompaniesPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [snapshot, setSnapshot] = useState<FormState | null>(null);
+  const [inlineEditing, setInlineEditing] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: "success" | "error" }>>([]);
@@ -172,13 +178,15 @@ export default function CompaniesPage() {
   function resetToSnapshot() {
     if (!snapshot) return;
     setForm(snapshot);
+    setInlineEditing(false);
     setFieldErrors({});
-    toast("Edicao revertida para o ultimo estado salvo.", "success");
+    toast("Edicao cancelada. Valores originais restaurados.", "success");
   }
 
   function openCreate() {
     setMode("create");
     setEditingId(null);
+    setInlineEditing(true);
     const now = dmy(new Date().toISOString(), true);
     setForm({ ...EMPTY_FORM, code: `EMP-${String(Date.now()).slice(-4)}`, createdAt: now });
     setSnapshot(null);
@@ -187,9 +195,10 @@ export default function CompaniesPage() {
   }
 
   function openEdit(company: CompanyApiItem) {
-    const mapped = toForm(company, statusDates[company.id] || {});
+    const mapped = toForm(company);
     setMode("edit");
     setEditingId(company.id);
+    setInlineEditing(false);
     setForm(mapped);
     setSnapshot(mapped);
     setFieldErrors({});
@@ -280,6 +289,7 @@ export default function CompaniesPage() {
   const start = (currentPage - 1) * pageSize;
   const paged = filtered.slice(start, start + pageSize);
   const end = filtered.length === 0 ? 0 : Math.min(filtered.length, start + pageSize);
+  const canEditFields = mode === "create" || inlineEditing;
 
   function validate() {
     const next: FieldErrors = {};
@@ -335,12 +345,14 @@ export default function CompaniesPage() {
       if (mode === "create") {
         await createCompanyRequest(token, payload);
         toast("Empresa criada com sucesso.", "success");
+        setModalOpen(false);
       } else if (editingId) {
         const updatePayload: CompanyUpdatePayload = { ...payload };
         await updateCompanyRequest(token, editingId, updatePayload);
         toast("Empresa atualizada com sucesso.", "success");
+        setInlineEditing(false);
+        setSnapshot({ ...form });
       }
-      setModalOpen(false);
       setReload((current) => current + 1);
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "Falha ao salvar empresa.";
@@ -355,28 +367,22 @@ export default function CompaniesPage() {
     }
   }
 
-  async function toggleActive(company: CompanyApiItem) {
+  async function deleteCurrentCompany() {
+    if (mode !== "edit" || !editingId) return;
     const token = getAccessToken();
     if (!token) {
       clearSession();
       router.replace("/");
       return;
     }
-    setTogglingId(company.id);
+    setSaving(true);
     try {
-      await deleteCompanyRequest(token, company.id);
-      const nowIso = new Date().toISOString();
-      setStatusDates((current) => {
-        const base = current[company.id] || {};
-        return {
-          ...current,
-          [company.id]: company.is_active ? { ...base, inactivatedAt: nowIso } : { ...base, reactivatedAt: nowIso },
-        };
-      });
-      toast(company.is_active ? "Empresa inativada com sucesso." : "Empresa reativada com sucesso.", "success");
+      await deleteCompanyRequest(token, editingId);
+      toast("Empresa excluida com sucesso.", "success");
+      setModalOpen(false);
       setReload((current) => current + 1);
     } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : "Falha ao atualizar status da empresa.";
+      const message = requestError instanceof Error ? requestError.message : "Falha ao excluir empresa.";
       if (message === "unauthorized") {
         clearSession();
         router.replace("/");
@@ -384,12 +390,17 @@ export default function CompaniesPage() {
       }
       toast(message, "error");
     } finally {
-      setTogglingId(null);
+      setSaving(false);
     }
   }
 
+  function handleLogout() {
+    clearSession();
+    router.replace("/");
+  }
+
   return (
-    <ErpShell activeNav="empresas" onLogout={() => {}} pageTitle="Empresas">
+    <ErpShell activeNav="empresas" onLogout={handleLogout} pageTitle="Empresas">
       {loading ? (
         <section className="flex h-full min-h-full w-full items-center justify-center rounded-md border border-[#2a3045] bg-[#161a24] p-6">
           <div className="flex flex-col items-center gap-3">
@@ -448,14 +459,14 @@ export default function CompaniesPage() {
               </button>
             </div>
             <button className={`erp-filter-btn ${showFilters ? "erp-filter-btn-on" : "erp-filter-btn-off"}`} onClick={() => setShowFilters((current) => !current)} type="button"><span className="material-symbols-outlined !text-[16px]">tune</span>Filtros</button>
-            <label className="erp-sort-label inline-flex h-9 items-center gap-2">
-              ORDENAR POR:
+            <div className="erp-sort-group">
+              <span className="erp-sort-label">Ordenar por:</span>
               <select className="erp-list-sort-select" onChange={(event) => setSortBy(event.target.value as SortBy)} value={sortBy}>
                 <option value="recent">Mais recente</option>
                 <option value="name_asc">Nome (A-Z)</option>
                 <option value="name_desc">Nome (Z-A)</option>
               </select>
-            </label>
+            </div>
           </div>
 
           {showFilters ? (
@@ -517,7 +528,6 @@ export default function CompaniesPage() {
                       <td className="px-4 py-3"><div className="flex justify-end gap-2">
                         <button className="erp-list-action-btn" onClick={(event) => { event.stopPropagation(); openEdit(company); }} type="button">Abrir</button>
                         <button className="erp-list-action-btn" onClick={(event) => { event.stopPropagation(); openEdit(company); }} type="button">Editar</button>
-                        <button className={`erp-list-action-btn ${company.is_active ? "border-[#991b1b] bg-[#7f1d1d] text-[#fca5a5] hover:border-[#b91c1c] hover:bg-[#8f2222]" : "border-[#166534] bg-[#14532d] text-[#86efac] hover:border-[#15803d] hover:bg-[#166534]"}`} disabled={togglingId === company.id} onClick={(event) => { event.stopPropagation(); void toggleActive(company); }} type="button">{togglingId === company.id ? "..." : company.is_active ? "Inativar" : "Reativar"}</button>
                       </div></td>
                     </tr>
                   ))
@@ -562,14 +572,20 @@ export default function CompaniesPage() {
                 <div>
                   <h2 className="text-[16px] font-semibold text-[#e2e8f0]">{mode === "create" ? "Nova empresa" : form.legalName || "Empresa"}</h2>
                   <p className="mt-1 font-mono text-[11px] text-[#64748b]">CNPJ: {form.cnpj || "--"} · Regime: {form.taxRegime}</p>
+                  {mode === "edit" && inlineEditing ? (
+                    <p className="mt-1 text-[12px] font-medium text-[#93c5fd]">Editando empresa</p>
+                  ) : null}
                 </div>
-                <div className="ml-auto flex gap-2">
-                  {mode === "edit" && snapshot ? <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={resetToSnapshot} type="button">Cancelar edicao</button> : null}
-                  <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={() => setModalOpen(false)} type="button">Fechar</button>
-                  <button className="rounded border border-[#166534] bg-[#14532d] px-4 py-2 text-sm text-[#86efac]" form="company-form" type="submit">{saving ? "Salvando..." : "Salvar"}</button>
-                </div>
+                <button
+                  className="ml-auto inline-flex h-9 w-9 items-center justify-center rounded border border-[#2a3045] bg-[#1e2332] text-[#94a3b8] transition hover:border-[#3a4260] hover:text-[#e2e8f0]"
+                  onClick={() => setModalOpen(false)}
+                  type="button"
+                >
+                  <span className="material-symbols-outlined !text-[18px]">close</span>
+                </button>
               </div>
               <form className="flex-1 space-y-3 overflow-y-auto p-4" id="company-form" onSubmit={save}>
+                <fieldset className="space-y-3" disabled={!canEditFields}>
                 <section className="rounded-md border border-[#2a3045] bg-[#161a24]"><header className="flex items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] px-4 py-2.5"><span className="rounded bg-[#1e3a5f] px-1.5 py-0.5 font-mono text-[10px] text-[#93c5fd]">01</span><h3 className="text-[13px] font-semibold text-[#e2e8f0]">Dados gerais</h3></header><div className="grid grid-cols-1 gap-3 p-4 xl:grid-cols-4">
                   <label className="grid gap-1 text-xs text-[#64748b]">Codigo *<input className={`h-10 rounded border px-3 text-[13px] ${fieldErrors.code ? "border-[#ef4444] bg-[#2d1518] text-[#fca5a5]" : "border-[#2a3045] bg-[#1e2332] text-[#e2e8f0]"}`} onChange={(event) => update("code", event.target.value)} value={form.code} /></label>
                   <label className="grid gap-1 text-xs text-[#64748b] xl:col-span-2">Razao social *<input className={`h-10 rounded border px-3 text-[13px] ${fieldErrors.legalName ? "border-[#ef4444] bg-[#2d1518] text-[#fca5a5]" : "border-[#2a3045] bg-[#1e2332] text-[#e2e8f0]"}`} onChange={(event) => update("legalName", event.target.value)} value={form.legalName} /></label>
@@ -601,13 +617,69 @@ export default function CompaniesPage() {
                   <label className="grid gap-1 text-xs text-[#64748b]">Status certificado<select className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[13px] text-[#e2e8f0]" onChange={(event) => update("certStatus", event.target.value as FormState["certStatus"])} value={form.certStatus}><option value="valid">Valido</option><option value="invalid">Invalido</option></select></label>
                   <label className="grid gap-1 text-xs text-[#64748b]">Vencimento certificado<input className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[13px] text-[#e2e8f0]" onChange={(event) => update("certDueDate", event.target.value)} placeholder="dd/mm/aaaa" value={form.certDueDate} /></label>
                 </div></section>
-                <section className="rounded-md border border-[#2a3045] bg-[#161a24]"><header className="flex items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] px-4 py-2.5"><span className="rounded bg-[#1e3a5f] px-1.5 py-0.5 font-mono text-[10px] text-[#93c5fd]">05</span><h3 className="text-[13px] font-semibold text-[#e2e8f0]">Controle de datas e status</h3></header><div className="grid grid-cols-1 gap-3 p-4 xl:grid-cols-4">
+                <section className="rounded-md border border-[#2a3045] bg-[#161a24]"><header className="flex items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] px-4 py-2.5"><span className="rounded bg-[#1e3a5f] px-1.5 py-0.5 font-mono text-[10px] text-[#93c5fd]">05</span><h3 className="text-[13px] font-semibold text-[#e2e8f0]">Historico / Auditoria</h3></header><div className="grid grid-cols-1 gap-3 p-4 xl:grid-cols-6">
                   <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Criacao</p><p className="mt-1 text-[13px] text-[#e2e8f0]">{form.createdAt || "--/--/----"}</p></div>
                   <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Ultima atualizacao</p><p className="mt-1 text-[13px] text-[#e2e8f0]">{form.updatedAt || "--/--/----"}</p></div>
-                  <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Inativacao</p><p className="mt-1 text-[13px] text-[#e2e8f0]">{form.inactivatedAt || "--/--/----"}</p></div>
-                  <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Reativacao</p><p className="mt-1 text-[13px] text-[#e2e8f0]">{form.reactivatedAt || "--/--/----"}</p></div>
+                  <label className="grid gap-1 rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2 text-xs text-[#64748b]"><span className="font-mono text-[10px] uppercase tracking-[0.12em]">Status</span><select className="h-9 rounded border border-[#2a3045] bg-[#161a24] px-3 text-[13px] text-[#e2e8f0]" onChange={(event) => update("isActive", event.target.value === "true")} value={String(form.isActive)}><option value="true">Ativa</option><option value="false">Inativa</option></select></label>
+                  <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Alterado por</p><p className="mt-1 text-[13px] text-[#e2e8f0]">{user.name || user.login || "Usuario atual"}</p></div>
                 </div></section>
+                </fieldset>
               </form>
+              <footer className="flex items-center justify-between border-t border-[#2a3045] px-5 py-3">
+                {mode === "edit" && !inlineEditing ? (
+                  <AlertDialog onOpenChange={setDeleteDialogOpen} open={deleteDialogOpen}>
+                    <AlertDialogTrigger asChild>
+                      <Button disabled={saving} variant="destructive">
+                        Excluir
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Excluir empresa?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Essa ação não pode ser desfeita. A empresa será removida permanentemente.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel asChild>
+                          <Button variant="outline">Cancelar</Button>
+                        </AlertDialogCancel>
+                        <AlertDialogAction asChild onClick={() => void deleteCurrentCompany()}>
+                          <Button variant="destructive">Confirmar exclusão</Button>
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                ) : (
+                  <div />
+                )}
+
+                <div className="flex items-center gap-2">
+                  {mode === "create" ? (
+                    <>
+                      <Button onClick={() => setModalOpen(false)} variant="outline">
+                        Cancelar
+                      </Button>
+                      <Button disabled={saving} form="company-form" type="submit">
+                        {saving ? "Salvando..." : "Salvar"}
+                      </Button>
+                    </>
+                  ) : inlineEditing ? (
+                    <>
+                      <Button onClick={resetToSnapshot} variant="outline">
+                        Cancelar
+                      </Button>
+                      <Button disabled={saving} form="company-form" type="submit">
+                        {saving ? "Salvando..." : "Salvar"}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button onClick={() => setInlineEditing(true)}>Editar</Button>
+                    </>
+                  )}
+                </div>
+              </footer>
             </div>
           </div>
         </div>

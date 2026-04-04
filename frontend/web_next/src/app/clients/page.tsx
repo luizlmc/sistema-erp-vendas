@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { ErpShell } from "@/components/ErpShell";
-import { clearSession, getAccessToken } from "@/lib/session";
+import { clearSession, getAccessToken, getUserIdentity } from "@/lib/session";
 import {
   ClientApiItem,
   createClientRequest,
@@ -47,6 +47,8 @@ type Client = {
   totalBought: string;
   customerSince: string;
   isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
   purchases: Purchase[];
 };
 
@@ -98,6 +100,8 @@ const INITIAL: Client[] = [
     totalBought: "148.200,00",
     customerSince: "10/01/2023",
     isActive: true,
+    createdAt: "10/01/2023",
+    updatedAt: "17/03/2026",
     purchases: [
       { id: "#5521", description: "4x Notebook Lenovo i5", date: "17/03/2026", value: "R$ 13.196,00", status: "Pago" },
       { id: "#5489", description: "2x Monitor LG 24\" + 10x Teclado", date: "02/03/2026", value: "R$ 6.199,00", status: "Pago" },
@@ -130,6 +134,8 @@ const INITIAL: Client[] = [
     totalBought: "4.820,00",
     customerSince: "12/02/2024",
     isActive: true,
+    createdAt: "12/02/2024",
+    updatedAt: "12/02/2024",
     purchases: [],
   },
 ];
@@ -159,6 +165,8 @@ const EMPTY_FORM: FormState = {
   totalBought: "0,00",
   customerSince: new Date().toLocaleDateString("pt-BR"),
   isActive: "true",
+  createdAt: new Date().toLocaleDateString("pt-BR"),
+  updatedAt: "",
 };
 
 const brl = (value: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value || 0);
@@ -217,6 +225,8 @@ function apiClientToUi(client: ClientApiItem): Client {
     totalBought: "0,00",
     customerSince: dmy(client.created_at),
     isActive: client.is_active,
+    createdAt: dmy(client.created_at),
+    updatedAt: dmy(client.created_at),
     purchases: [],
   };
 }
@@ -224,6 +234,7 @@ function apiClientToUi(client: ClientApiItem): Client {
 export default function ClientsPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const user = getUserIdentity();
   const [items, setItems] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -240,11 +251,15 @@ export default function ClientsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [mode, setMode] = useState<"create" | "edit">("create");
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [snapshot, setSnapshot] = useState<FormState | null>(null);
+  const [inlineEditing, setInlineEditing] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [fieldErrors, setFieldErrors] = useState<ClientFieldErrors>({});
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [togglingId, setTogglingId] = useState<number | null>(null);
+  const [changingStatus, setChangingStatus] = useState(false);
   const [kpiReady, setKpiReady] = useState(false);
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: "success" | "error" }>>([]);
 
@@ -360,6 +375,7 @@ export default function ClientsPage() {
   }, [items]);
 
   const editingClient = items.find((c) => c.id === editingId) ?? null;
+  const canEditFields = mode === "create" || inlineEditing;
   const req = <span className="ml-1 align-middle font-mono text-[12px] leading-none text-[#ef4444]">*</span>;
 
   function toast(message: string, type: "success" | "error") {
@@ -371,8 +387,10 @@ export default function ClientsPage() {
   function openCreate() {
     setMode("create");
     setEditingId(null);
+    setInlineEditing(true);
     const nextId = items.length > 0 ? Math.max(...items.map((item) => item.id)) + 1 : 1;
     setForm({ ...EMPTY_FORM, code: `CLI-${String(nextId).padStart(4, "0")}` });
+    setSnapshot(null);
     setFormError("");
     setFieldErrors({});
     setModalOpen(true);
@@ -381,10 +399,22 @@ export default function ClientsPage() {
   function openEdit(client: Client) {
     setMode("edit");
     setEditingId(client.id);
-    setForm({ ...client, isActive: String(client.isActive) as "true" | "false" });
+    setInlineEditing(false);
+    const mapped = { ...client, isActive: String(client.isActive) as "true" | "false" };
+    setForm(mapped);
+    setSnapshot(mapped);
     setFormError("");
     setFieldErrors({});
     setModalOpen(true);
+  }
+
+  function resetToSnapshot() {
+    if (!snapshot) return;
+    setForm(snapshot);
+    setInlineEditing(false);
+    setFieldErrors({});
+    setFormError("");
+    toast("Edicao revertida para o ultimo estado salvo.", "success");
   }
 
   function validateForm(values: FormState): ClientFieldErrors {
@@ -456,14 +486,16 @@ export default function ClientsPage() {
       if (mode === "create") {
         await createClientRequest(token, payload);
         toast("Cliente criado com sucesso.", "success");
+        setModalOpen(false);
       } else if (editingId) {
         await updateClientRequest(token, editingId, payload);
         toast("Cliente atualizado com sucesso.", "success");
+        setInlineEditing(false);
+        setSnapshot({ ...form });
       }
 
       await queryClient.invalidateQueries({ queryKey: ACTIVE_CLIENTS_QUERY_KEY });
       setReload((value) => value + 1);
-      setModalOpen(false);
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "Falha ao salvar cliente.";
       if (message === "unauthorized") {
@@ -477,9 +509,10 @@ export default function ClientsPage() {
     }
   }
 
-  async function inactivate() {
-    if (!editingId) return;
-    setDeleting(true);
+  async function setClientStatus(clientId: number, nextActive: boolean, closeModalAfter = false) {
+    setDeleting(closeModalAfter);
+    setChangingStatus(!closeModalAfter);
+    setTogglingId(clientId);
     try {
       const token = getAccessToken();
       if (!token) {
@@ -488,13 +521,17 @@ export default function ClientsPage() {
         return;
       }
 
-      await updateClientRequest(token, editingId, { is_active: false });
-      toast("Cliente inativado com sucesso.", "success");
+      await updateClientRequest(token, clientId, { is_active: nextActive });
+      toast(nextActive ? "Cliente reativado com sucesso." : "Cliente inativado com sucesso.", "success");
       await queryClient.invalidateQueries({ queryKey: ACTIVE_CLIENTS_QUERY_KEY });
       setReload((value) => value + 1);
-      setModalOpen(false);
+      if (closeModalAfter) {
+        setModalOpen(false);
+      } else {
+        setForm((current) => ({ ...current, isActive: nextActive ? "true" : "false" }));
+      }
     } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : "Falha ao inativar cliente.";
+      const message = requestError instanceof Error ? requestError.message : "Falha ao atualizar status do cliente.";
       if (message === "unauthorized") {
         clearSession();
         router.replace("/");
@@ -503,6 +540,8 @@ export default function ClientsPage() {
       toast(message, "error");
     } finally {
       setDeleting(false);
+      setChangingStatus(false);
+      setTogglingId(null);
     }
   }
 
@@ -565,10 +604,12 @@ export default function ClientsPage() {
               </button>
             </div>
             <button className={`erp-filter-btn ${showFilters ? "erp-filter-btn-on" : "erp-filter-btn-off"}`} onClick={() => setShowFilters((v) => !v)} type="button"><span className="material-symbols-outlined !text-[16px]">tune</span>Filtros</button>
-            <span className="erp-sort-label ml-2">ORDENAR:</span>
-            <select className="erp-list-sort-select" value={sortBy} onChange={(e) => setSortBy(e.target.value as SortBy)}>
-              <option value="recent">Mais recentes</option><option value="name_asc">Nome A-Z</option><option value="name_desc">Nome Z-A</option>
-            </select>
+            <div className="erp-sort-group">
+              <span className="erp-sort-label">Ordenar por:</span>
+              <select className="erp-list-sort-select" value={sortBy} onChange={(e) => setSortBy(e.target.value as SortBy)}>
+                <option value="recent">Mais recentes</option><option value="name_asc">Nome A-Z</option><option value="name_desc">Nome Z-A</option>
+              </select>
+            </div>
           </div>
           {showFilters ? (
             <div className="space-y-2 px-4 py-2">
@@ -630,14 +671,29 @@ export default function ClientsPage() {
             <span>Cliente</span><span>Dados</span><span>Data</span><span>Status</span><span>Limite</span><span className="text-right">Acoes</span>
           </div>
           {loading ? <p className="px-4 py-5 text-sm text-[#94a3b8]">Carregando clientes...</p> : pagedFiltered.map((c) => (
-            <button className="grid w-full grid-cols-[1.1fr_2.2fr_1.2fr_1.2fr_1.2fr_0.7fr] items-center border-b border-[#2a3045] px-4 py-3 text-left hover:bg-[#1e2332]" key={c.id} onClick={() => openEdit(c)} type="button">
+            <div
+              className="grid w-full cursor-pointer grid-cols-[1.1fr_2.2fr_1.2fr_1.2fr_1.2fr_0.7fr] items-center border-b border-[#2a3045] px-4 py-3 text-left hover:bg-[#1e2332]"
+              key={c.id}
+              onClick={() => openEdit(c)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  openEdit(c);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
               <div><p className="font-mono text-[13px] font-bold text-[#3b82f6]">#{c.code}</p><p className="font-mono text-[10px] text-[#64748b]">{c.document}</p></div>
               <div><p className="text-[14px] font-semibold text-[#e2e8f0]">{c.name}</p><p className="font-mono text-[10px] text-[#64748b]">{c.fantasyName || "--"}</p></div>
               <div className="font-mono text-[12px] text-[#94a3b8]">{c.customerSince}</div>
               <div><span className={`erp-tag ${c.isActive ? "erp-tag-success" : "erp-tag-danger"}`}>{c.isActive ? "Ativo" : "Inativo"}</span></div>
               <div className="font-mono text-[13px] text-[#e2e8f0]">R$ {c.creditLimit}</div>
-              <div className="flex justify-end"><span className="material-symbols-outlined !text-[18px] text-[#64748b]">more_vert</span></div>
-            </button>
+              <div className="flex justify-end gap-1.5">
+                <button className="erp-list-action-btn" onClick={(event) => { event.stopPropagation(); openEdit(c); }} type="button">Abrir</button>
+                <button className="erp-list-action-btn" onClick={(event) => { event.stopPropagation(); openEdit(c); }} type="button">Editar</button>
+              </div>
+            </div>
           ))}
                     {!loading ? (
             <div className="erp-pagination-footer">
@@ -675,15 +731,21 @@ export default function ClientsPage() {
                   <div>
                     <h2 className="text-[16px] font-semibold text-[#e2e8f0]">{form.name || "Novo cliente"}</h2>
                     <p className="mt-1 font-mono text-[11px] text-[#64748b]">{form.code || "CLI-NEW"} · Cliente desde: {form.customerSince} · Total comprado: R$ {form.totalBought}</p>
+                    {mode === "edit" && inlineEditing ? (
+                      <p className="mt-1 text-[12px] font-medium text-[#93c5fd]">Editando cliente</p>
+                    ) : null}
                   </div>
-                  <div className="ml-auto flex gap-2">
-                    {mode === "edit" ? <button className="rounded border border-[#991b1b] bg-[#7f1d1d] px-4 py-2 text-sm text-[#fca5a5]" onClick={inactivate} type="button">{deleting ? "Inativando..." : "Inativar"}</button> : null}
-                    <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={() => setModalOpen(false)} type="button">Cancelar</button>
-                    <button className="rounded border border-[#166534] bg-[#14532d] px-4 py-2 text-sm text-[#86efac]" form="client-form" type="submit">{saving ? "Salvando..." : "Salvar"}</button>
-                  </div>
+                  <button
+                    className="ml-auto inline-flex h-9 w-9 items-center justify-center rounded border border-[#2a3045] bg-[#1e2332] text-[#94a3b8] transition hover:border-[#3a4260] hover:text-[#e2e8f0]"
+                    onClick={() => setModalOpen(false)}
+                    type="button"
+                  >
+                    <span className="material-symbols-outlined !text-[18px]">close</span>
+                  </button>
                 </div>
 
-                <form className="client-modal flex-1 space-y-3 overflow-y-auto p-4" id="client-form" onSubmit={save}>
+                <form className="client-modal flex-1 overflow-y-auto p-4" id="client-form" onSubmit={save}>
+                  <fieldset className="space-y-3" disabled={!canEditFields}>
                   <section className="rounded-md border border-[#2a3045] bg-[#161a24]"><header className="flex items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] px-4 py-2.5"><span className="rounded bg-[#1e3a5f] px-1.5 py-0.5 font-mono text-[10px] text-[#93c5fd]">01</span><h3 className="text-[13px] font-semibold text-[#e2e8f0]">Identificacao</h3></header>
                     <div className="grid grid-cols-1 gap-3 p-4 xl:grid-cols-6">
                       <label className="grid gap-1 text-xs text-[#64748b] xl:col-span-2"><span className="inline-flex items-center">Tipo {req}</span><select className={inputClass("personType")} value={form.personType} onChange={(e) => setField("personType", e.target.value as PersonType)}><option>Pessoa juridica</option><option>Pessoa fisica</option></select>{fieldErrors.personType ? <span className="text-[11px] text-[#ef4444]">{fieldErrors.personType}</span> : null}</label>
@@ -691,7 +753,8 @@ export default function ClientsPage() {
                       <label className="grid gap-1 text-xs text-[#64748b] xl:col-span-2"><span className="inline-flex items-center">Razao social / Nome {req}</span><input className={inputClass("name")} value={form.name} onChange={(e) => setField("name", e.target.value)} />{fieldErrors.name ? <span className="text-[11px] text-[#ef4444]">{fieldErrors.name}</span> : null}</label>
                       <label className="grid gap-1 text-xs text-[#64748b] xl:col-span-2">Nome fantasia<input className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[13px] text-[#e2e8f0]" value={form.fantasyName} onChange={(e) => setField("fantasyName", e.target.value)} /></label>
                       <label className="grid gap-1 text-xs text-[#64748b] xl:col-span-2">Inscricao estadual<input className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[13px] text-[#e2e8f0]" value={form.ie} onChange={(e) => setField("ie", e.target.value)} /></label>
-                      <label className="grid gap-1 text-xs text-[#64748b] xl:col-span-2"><span className="inline-flex items-center">Indicador IE {req}</span><select className={inputClass("ieIndicator")} value={form.ieIndicator} onChange={(e) => setField("ieIndicator", e.target.value)}><option>1 - Contribuinte</option><option>2 - Isento</option><option>9 - Nao contribuinte</option></select>{fieldErrors.ieIndicator ? <span className="text-[11px] text-[#ef4444]">{fieldErrors.ieIndicator}</span> : null}</label>
+                      <label className="grid gap-1 text-xs text-[#64748b] xl:col-span-1"><span className="inline-flex items-center">Indicador IE {req}</span><select className={inputClass("ieIndicator")} value={form.ieIndicator} onChange={(e) => setField("ieIndicator", e.target.value)}><option>1 - Contribuinte</option><option>2 - Isento</option><option>9 - Nao contribuinte</option></select>{fieldErrors.ieIndicator ? <span className="text-[11px] text-[#ef4444]">{fieldErrors.ieIndicator}</span> : null}</label>
+                      <label className="grid gap-1 text-xs text-[#64748b] xl:col-span-1">Status<select className="h-10 rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[13px] text-[#e2e8f0]" value={form.isActive} onChange={(e) => setField("isActive", e.target.value as "true" | "false")}><option value="true">Ativo</option><option value="false">Inativo</option></select></label>
                     </div>
                   </section>
 
@@ -735,8 +798,41 @@ export default function ClientsPage() {
                       ))}
                     </div>
                   </section>
-                  {null}
+                  <section className="rounded-md border border-[#2a3045] bg-[#161a24]"><header className="flex items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] px-4 py-2.5"><span className="rounded bg-[#1e3a5f] px-1.5 py-0.5 font-mono text-[10px] text-[#93c5fd]">06</span><h3 className="text-[13px] font-semibold text-[#e2e8f0]">Historico / Auditoria</h3></header>
+                    <div className="grid grid-cols-1 gap-3 p-4 xl:grid-cols-4">
+                      <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Criado em</p><p className="mt-1 text-[13px] text-[#e2e8f0]">{form.createdAt || "--/--/----"}</p></div>
+                      <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Ultima alteracao</p><p className="mt-1 text-[13px] text-[#e2e8f0]">{form.updatedAt || "--/--/----"}</p></div>
+                      <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Alterado por</p><p className="mt-1 text-[13px] text-[#e2e8f0]">{user.name || user.login || "Usuario atual"}</p></div>
+                      <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Ultima acao</p><p className="mt-1 text-[13px] text-[#e2e8f0]">{mode === "edit" ? "Edicao de cadastro" : "Novo cadastro"}</p></div>
+                    </div>
+                  </section>
+                  </fieldset>
                 </form>
+                <footer className="flex items-center justify-end border-t border-[#2a3045] px-5 py-3">
+                  {mode === "create" ? (
+                    <div className="flex items-center gap-2">
+                      <button className="erp-btn erp-btn-secondary" onClick={() => setModalOpen(false)} type="button">
+                        Cancelar
+                      </button>
+                      <button className="erp-btn erp-btn-success" form="client-form" type="submit">
+                        {saving ? "Salvando..." : "Salvar"}
+                      </button>
+                    </div>
+                  ) : inlineEditing ? (
+                    <div className="flex items-center gap-2">
+                      <button className="erp-btn erp-btn-secondary" onClick={resetToSnapshot} type="button">
+                        Cancelar
+                      </button>
+                      <button className="erp-btn erp-btn-success" form="client-form" type="submit">
+                        {saving ? "Salvando..." : "Salvar"}
+                      </button>
+                    </div>
+                  ) : (
+                    <button className="erp-btn erp-btn-primary" onClick={() => setInlineEditing(true)} type="button">
+                      Editar
+                    </button>
+                  )}
+                </footer>
               </div>
             </div>
           </div>

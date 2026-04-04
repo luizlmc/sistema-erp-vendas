@@ -1,167 +1,109 @@
 # PROJECT_CONTEXT.md
 
-Última atualização: 04/04/2026
+Ultima atualizacao: 04/04/2026
 
-## 1) Visão geral do projeto
+## 1) Visao geral
 
-`sistema-erp-vendas` é um ERP com backend em Delphi (Horse + FireDAC + PostgreSQL) e frontend web em Next.js.
+`sistema-erp-vendas` e um ERP com backend Delphi (Horse + FireDAC + PostgreSQL) e frontend Next.js.
 
-Objetivo principal:
-- Cobrir ciclo comercial e fiscal: cadastro, venda, PDV, pedidos/orçamentos, faturamento, fiscal e contas a receber.
+Foco atual do desenvolvimento:
+- Consolidar ciclo comercial completo com regras de status e rastreabilidade:
+  - Orcamento -> Pedido -> Faturamento -> Fiscal -> Receber
+  - Fluxos alternativos:
+    - Pedido sem fiscal
+    - Pedido com fiscal
+    - Emissao fiscal direta (sem pedido)
 
-Stack atual:
+Stack:
 - Backend: Delphi 11.4, Horse, FireDAC, PostgreSQL.
-- Frontend: Next.js (App Router), TypeScript, Tailwind, React Query.
+- Frontend: Next.js App Router, TypeScript, Tailwind, React Query.
 
-## 2) Estrutura de pastas (atual)
+## 2) Estrutura principal
 
-Raiz:
-- `C:\Dev\delphi\Projetos\sistema-erp-vendas\src` → backend Delphi
-- `C:\Dev\delphi\Projetos\sistema-erp-vendas\frontend\web_next` → frontend Next.js
-- `C:\Dev\delphi\Projetos\sistema-erp-vendas\postman` → coleções/testes de API
-- `C:\Dev\delphi\Projetos\sistema-erp-vendas\modules`, `libs`, `tools` → apoio
+- Backend: `C:\Dev\delphi\Projetos\sistema-erp-vendas\src`
+  - `Api\V1\Routes`
+  - `Services\Orders`, `Services\Quotes`, `Services\Fiscal`, `Services\Finance`
+  - `Services\Products`, `Services\Clients`, `Services\Companies`
+  - `Infra\DB`
+- Frontend: `C:\Dev\delphi\Projetos\sistema-erp-vendas\frontend\web_next`
+  - Paginas: `/dashboard`, `/companies`, `/products`, `/clients`, `/sales`, `/fiscal`, `/receivables`, `/pdv`
+  - API client: `src\lib\api.ts`
 
-Backend (`src`) – principais módulos:
-- `Api\V1\Routes` (rotas REST)
-- `Services\Products`, `Services\Clients`, `Services\Companies`
-- `Services\Orders`, `Services\Quotes`
-- `Services\Finance` (recebíveis)
-- `Services\Fiscal` (NFe/NFCe/NFSe + providers)
-- `Services\Dashboard`, `Services\Auth`, `Services\Audit`
-- `Infra\DB` (pool, migrator, bootstrap, schema)
+## 3) Estado atual (resumo)
 
-Frontend (`frontend\web_next\src`) – principais páginas:
-- `/dashboard`
-- `/companies`
-- `/products`
-- `/clients`
-- `/sales` (comercial: pedidos + orçamentos)
-- `/receivables`
-- `/fiscal`
-- `/pdv`
+### Cadastros
+- CRUD funcional para empresas, produtos e clientes.
+- Padrao visual unificado (filtros, paginacao, toasts, botoes, modais).
 
-## 3) Funcionalidades já implementadas (resumo)
+### Comercial
+- Orcamentos e pedidos ativos no front/back.
+- Conversao de orcamento para pedido implementada.
+- Acoes por status em andamento (etapa 1 de consolidacao).
+- Modal de detalhe com timeline e observacoes.
 
-### 3.1 Cadastros
-- CRUD de Empresas, Produtos e Clientes.
-- Inativação/reativação por seletor de status.
-- Modais padronizados com validação e toasts.
-
-### 3.2 Comercial
-- Pedidos e Orçamentos.
-- Conversão orçamento → pedido.
-- Ações por status (aprovar, faturar, cancelar, emitir fiscal).
-- Modal de detalhamento com timeline, anexos e observações.
-
-### 3.3 Financeiro
-- Contas a receber com listagem e detalhe.
-- Geração de títulos via faturamento (quando aplicável pela API).
-
-### 3.4 Fiscal
-- Emissão a partir do pedido.
-- Emissão direta (sem origem de pedido), conforme endpoint disponível.
+### Fiscal
+- Emissao fiscal por origem (pedido) e emissao direta.
 - Listagem de documentos fiscais.
 
-### 3.5 PDV
-- Catálogo de produtos, carrinho e fechamento de venda.
-- Fluxo de fechamento com:
-  - escolha de cliente,
-  - pagamento,
-  - opção de fiscal (sem fiscal / NFC-e / NF-e),
-  - opção à vista / a prazo (parcelas).
-- Salvar venda para retomada posterior (persistência local no browser).
+### Financeiro
+- Contas a receber com listagem/detalhe.
+- Baixas e status principais implementados.
 
-## 4) API consumida no frontend (arquivo fonte)
+### PDV
+- Carrinho + fechamento de venda.
+- Salvar venda para retomada (local no browser).
+- Fluxo de fechamento sendo refinado para aderir ao comercial/fiscal/receber.
 
-Arquivo central:
+## 4) Contratos e integracao
+
+Arquivo central de consumo da API:
 - `C:\Dev\delphi\Projetos\sistema-erp-vendas\frontend\web_next\src\lib\api.ts`
 
-Principais grupos:
-- Auth: login
-- Dashboard: resumo
-- Cadastros: products, clients, companies
-- Comercial: orders, quotes + history
-- Fiscal: documents e emissão
-- Financeiro: receivables + pagamentos
+Observacao operacional:
+- Front usa proxy interno Next em `/api/proxy/...` para reduzir problemas de ambiente local.
 
-## 5) Padrões de UI/UX adotados
+## 5) Regras de negocio prioritarias (etapa 1)
 
-- Tema claro/escuro global com persistência de preferência.
-- Header e sidebar fixos; scroll no conteúdo.
-- KPIs com visual/spacing/animação padronizados.
-- Botões padronizados:
-  - primário (ação principal),
-  - secundário,
-  - destrutivo.
-- Toasts padronizados para feedback de CRUD e validações.
-- Listagens com:
-  - busca,
-  - filtros,
-  - ordenação,
-  - paginação,
-  - ações consistentes.
+- Orcamento nao deve faturar direto sem conversao para pedido (fluxo padrao).
+- Pedido cancelado nao pode:
+  - aprovar,
+  - faturar,
+  - emitir fiscal.
+- Pedido faturado:
+  - nao pode voltar para aberto/aprovado.
+- Faturamento parcial:
+  - pedido permanece com saldo restante.
+- Venda a prazo:
+  - deve gerar contas a receber.
+- Fiscal:
+  - pode existir com origem de pedido ou emissao direta.
+- Timeline:
+  - exibir somente eventos reais, com data/hora/usuario quando houver.
 
-## 6) Regras de negócio importantes (vigentes)
+## 6) Execucao local
 
-- Nem toda venda gera fiscal.
-- Pedido pode existir sem documento fiscal.
-- Documento fiscal pode ser emitido:
-  - a partir de pedido,
-  - diretamente no módulo fiscal.
-- Vendas a prazo devem gerar títulos no financeiro (via fluxo de faturamento).
-- Rastreabilidade entre pedido/orçamento/fiscal/recebível é obrigatória.
+### Backend
+- Executavel preferencial atual:
+  - `C:\Dev\delphi\Projetos\sistema-erp-vendas\src\SistemaERPVendas.exe`
+- Config:
+  - `C:\Dev\delphi\Projetos\sistema-erp-vendas\src\appsettings.ini`
 
-## 7) Execução local
+### Frontend
+- Pasta:
+  - `C:\Dev\delphi\Projetos\sistema-erp-vendas\frontend\web_next`
+- Comandos:
+  - `npm install`
+  - `npm run dev`
+  - `npm run build`
 
-### Frontend (Next)
-Pasta:
-- `C:\Dev\delphi\Projetos\sistema-erp-vendas\frontend\web_next`
+## 7) Proximo ciclo recomendado apos etapa 1
 
-Comandos:
-- `npm install`
-- `npm run dev`
-- build: `npm run build`
-
-### Backend (Delphi)
-Projeto principal:
-- `C:\Dev\delphi\Projetos\sistema-erp-vendas\src\SistemaERPVendas.dproj`
-
-Executável debug (quando compilado):
-- `C:\Dev\delphi\Projetos\sistema-erp-vendas\src\Win64\Debug\SistemaERPVendas.exe`
-
-Config:
-- `C:\Dev\delphi\Projetos\sistema-erp-vendas\src\appsettings.ini`
-
-## 8) Convenções de manutenção
-
-- Centralizar contratos HTTP em `src/lib/api.ts`.
-- Evitar duplicar regras de status no frontend; preferir utilitários.
-- Qualquer ajuste de layout global deve passar por componentes base (`ErpShell`, estilos globais, botões padronizados).
-- Em modais:
-  - separar estado de visualização x edição,
-  - validar antes de persistir,
-  - manter feedback via toast.
-
-## 9) Próximos passos recomendados
-
-1. Consolidar persistência de “vendas salvas para retomada” do PDV em backend (hoje local no navegador).
-2. Fechar ciclo completo de títulos a receber no fluxo PDV a prazo (auditoria e rastreio fim a fim).
-3. Expandir auditoria de ações críticas por entidade (quem/quando/o quê).
-4. Adicionar testes de integração para fluxos:
-   - orçamento → pedido → faturamento,
-   - pedido sem fiscal,
-   - pedido com fiscal,
-   - emissão fiscal direta.
-5. Criar `CHECKLIST_RELEASE.md` para homologação por módulo.
-
-## 10) Arquivos-chave para onboarding rápido
-
-- Backend:
-  - `C:\Dev\delphi\Projetos\sistema-erp-vendas\src\Api\V1\Routes`
-  - `C:\Dev\delphi\Projetos\sistema-erp-vendas\src\Services`
-  - `C:\Dev\delphi\Projetos\sistema-erp-vendas\src\Infra\DB`
-- Frontend:
-  - `C:\Dev\delphi\Projetos\sistema-erp-vendas\frontend\web_next\src\components\ErpShell.tsx`
-  - `C:\Dev\delphi\Projetos\sistema-erp-vendas\frontend\web_next\src\lib\api.ts`
-  - `C:\Dev\delphi\Projetos\sistema-erp-vendas\frontend\web_next\src\app`
-
+1. Fechar transicoes de status com matriz unica front/back.
+2. Garantir reflexo financeiro/fiscal/estoque em cancelamentos.
+3. Expandir auditoria por entidade (quem/quando/o que mudou).
+4. Cobrir cenarios E2E:
+   - orcamento -> pedido -> sem fiscal
+   - orcamento -> pedido -> fiscal
+   - pedido direto -> sem fiscal
+   - pedido direto -> fiscal
+   - fiscal direto (sem pedido)

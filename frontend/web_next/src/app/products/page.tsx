@@ -13,7 +13,7 @@ import {
   updateProductRequest,
 } from "@/lib/api";
 import { ErpShell } from "@/components/ErpShell";
-import { clearSession, getAccessToken } from "@/lib/session";
+import { clearSession, getAccessToken, getUserIdentity } from "@/lib/session";
 const ACTIVE_PRODUCTS_QUERY_KEY = ["catalog", "products", "active"] as const;
 
 type SortBy = "recent" | "amount_desc" | "amount_asc" | "name_asc" | "name_desc";
@@ -179,6 +179,7 @@ const dmy = (value?: string | null) => {
 export default function ProductsPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const user = getUserIdentity();
   const [items, setItems] = useState<Product[]>([]);
   const [extrasById, setExtrasById] = useState<Record<number, Extras>>({});
   const [loading, setLoading] = useState(true);
@@ -197,11 +198,15 @@ export default function ProductsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [mode, setMode] = useState<"create" | "edit">("create");
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [snapshot, setSnapshot] = useState<FormState | null>(null);
+  const [inlineEditing, setInlineEditing] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [fieldErrors, setFieldErrors] = useState<ProductFieldErrors>({});
   const [kpiReady, setKpiReady] = useState(false);
   const [error, setError] = useState("");
   const [formError, setFormError] = useState("");
+  const [togglingId, setTogglingId] = useState<number | null>(null);
+  const [changingStatus, setChangingStatus] = useState(false);
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: "success" | "error" }>>([]);
 
   function pushToast(message: string, type: "success" | "error") {
@@ -343,6 +348,7 @@ export default function ProductsPage() {
     const critical = items.filter((p) => p.is_active && p.stock_qty <= Number(extrasById[p.id]?.stockMin ?? "10")).length;
     return { total, active, avg, critical };
   }, [items, extrasById]);
+  const canEditFields = mode === "create" || inlineEditing;
   const req = <span className="ml-1 align-middle font-mono text-[12px] leading-none text-[#ef4444]">*</span>;
 
   function clearFieldError(key: ProductFieldErrorKey) {
@@ -400,7 +406,9 @@ export default function ProductsPage() {
   function openCreate() {
     setMode("create");
     setEditingId(null);
+    setInlineEditing(true);
     setForm({ ...EMPTY_FORM, extras: { ...EMPTY_EXTRAS } });
+    setSnapshot(null);
     setFormError("");
     setFieldErrors({});
     setModalOpen(true);
@@ -409,8 +417,9 @@ export default function ProductsPage() {
   function openEdit(product: Product) {
     setMode("edit");
     setEditingId(product.id);
+    setInlineEditing(false);
     const extras = extrasById[product.id] || EMPTY_EXTRAS;
-    setForm({
+    const mapped: FormState = {
       sku: product.sku || "",
       name: product.name || "",
       description: product.description || product.name || "",
@@ -443,10 +452,21 @@ export default function ProductsPage() {
         cofinsCst: product.cofins_cst || extras.cofinsCst || "49",
         cofins: String(product.cofins_p_cofins ?? 0).replace(".", ","),
       },
-    });
+    };
+    setForm(mapped);
+    setSnapshot(mapped);
     setFormError("");
     setFieldErrors({});
     setModalOpen(true);
+  }
+
+  function resetToSnapshot() {
+    if (!snapshot) return;
+    setForm(snapshot);
+    setInlineEditing(false);
+    setFieldErrors({});
+    setFormError("");
+    pushToast("Edicao revertida para o ultimo estado salvo.", "success");
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -526,14 +546,16 @@ export default function ProductsPage() {
         const created = await createProductRequest(token, payload);
         setExtrasById((current) => ({ ...current, [created.id]: { ...form.extras } }));
         pushToast("Produto criado com sucesso.", "success");
+        setModalOpen(false);
       } else if (editingId) {
         await updateProductRequest(token, editingId, payload as ProductUpdatePayload);
         setExtrasById((current) => ({ ...current, [editingId]: { ...form.extras } }));
         pushToast("Produto atualizado com sucesso.", "success");
+        setInlineEditing(false);
+        setSnapshot({ ...form, extras: { ...form.extras } });
       }
       await queryClient.invalidateQueries({ queryKey: ACTIVE_PRODUCTS_QUERY_KEY });
       setReload((r) => r + 1);
-      setModalOpen(false);
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "Falha ao salvar.";
       setFormError(message);
@@ -543,23 +565,31 @@ export default function ProductsPage() {
     }
   }
 
-  async function inactivate() {
-    if (!editingId || deleting) return;
+  async function setProductStatus(productId: number, nextActive: boolean, closeModalAfter = false) {
+    if (deleting || changingStatus || togglingId === productId) return;
     const token = getAccessToken();
     if (!token) return;
     try {
-      setDeleting(true);
-      await deleteProductRequest(token, editingId);
-      pushToast("Produto inativado com sucesso.", "success");
+      setDeleting(closeModalAfter);
+      setChangingStatus(!closeModalAfter);
+      setTogglingId(productId);
+      await deleteProductRequest(token, productId);
+      pushToast(nextActive ? "Produto reativado com sucesso." : "Produto inativado com sucesso.", "success");
       await queryClient.invalidateQueries({ queryKey: ACTIVE_PRODUCTS_QUERY_KEY });
       setReload((r) => r + 1);
-      setModalOpen(false);
+      if (closeModalAfter) {
+        setModalOpen(false);
+      } else {
+        setForm((current) => ({ ...current, isActive: nextActive }));
+      }
     } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : "Falha ao inativar.";
+      const message = requestError instanceof Error ? requestError.message : "Falha ao atualizar status do produto.";
       setFormError(message);
       pushToast(message, "error");
     } finally {
       setDeleting(false);
+      setChangingStatus(false);
+      setTogglingId(null);
     }
   }
 
@@ -621,14 +651,16 @@ export default function ProductsPage() {
               </button>
             </div>
             <button className={`erp-filter-btn ${showFilters ? "erp-filter-btn-on" : "erp-filter-btn-off"}`} onClick={() => setShowFilters((v) => !v)} type="button"><span className="material-symbols-outlined !text-[16px]">tune</span>Filtros</button>
-            <span className="erp-sort-label ml-2">ORDENAR:</span>
-            <select className="erp-list-sort-select outline-none focus:border-[#3b82f6]" onChange={(e) => setSortBy(e.target.value as SortBy)} value={sortBy}>
-              <option value="recent">Mais recentes</option>
-              <option value="amount_desc">Preco maior</option>
-              <option value="amount_asc">Preco menor</option>
-              <option value="name_asc">Nome A-Z</option>
-              <option value="name_desc">Nome Z-A</option>
-            </select>
+            <div className="erp-sort-group">
+              <span className="erp-sort-label">Ordenar por:</span>
+              <select className="erp-list-sort-select outline-none focus:border-[#3b82f6]" onChange={(e) => setSortBy(e.target.value as SortBy)} value={sortBy}>
+                <option value="recent">Mais recentes</option>
+                <option value="amount_desc">Preco maior</option>
+                <option value="amount_asc">Preco menor</option>
+                <option value="name_asc">Nome A-Z</option>
+                <option value="name_desc">Nome Z-A</option>
+              </select>
+            </div>
           </div>
           {showFilters ? (
             <div className="space-y-2 px-4 py-2">
@@ -711,11 +743,18 @@ export default function ProductsPage() {
                     : "bg-[#14532d] text-[#86efac]";
 
                 return (
-                  <button
-                    className="grid w-full grid-cols-[1.15fr_2.2fr_1.35fr_1.15fr_1.25fr_0.7fr] items-center border-b border-[#2a3045] px-4 py-3 text-left transition hover:bg-[#1e2332]"
+                  <div
+                    className="grid w-full cursor-pointer grid-cols-[1.15fr_2.2fr_1.35fr_1.15fr_1.25fr_0.7fr] items-center border-b border-[#2a3045] px-4 py-3 text-left transition hover:bg-[#1e2332]"
                     key={p.id}
                     onClick={() => openEdit(p)}
-                    type="button"
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openEdit(p);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
                   >
                     <div className="min-w-0">
                       <p className="truncate font-mono text-[13px] font-bold text-[#3b82f6]">#{p.sku || "--"}</p>
@@ -739,9 +778,10 @@ export default function ProductsPage() {
                       <p className={`mt-0.5 font-mono text-[10px] ${p.stock_qty <= min ? "text-[#ef4444]" : "text-[#f59e0b]"}`}>{p.stock_qty} un. (min: {min})</p>
                     </div>
                     <div className="flex justify-end gap-1.5">
-                      <span className="material-symbols-outlined !text-[18px] text-[#64748b]">more_vert</span>
+                      <button className="erp-list-action-btn" onClick={(event) => { event.stopPropagation(); openEdit(p); }} type="button">Abrir</button>
+                      <button className="erp-list-action-btn" onClick={(event) => { event.stopPropagation(); openEdit(p); }} type="button">Editar</button>
                     </div>
-                  </button>
+                  </div>
                 );
               })
             )}
@@ -782,14 +822,20 @@ export default function ProductsPage() {
                   <div>
                     <h2 className="text-[16px] font-semibold text-[#e2e8f0]">{form.name || (mode === "create" ? "Novo produto" : "Produto")}</h2>
                     <p className="mt-1 font-mono text-[11px] text-[#64748b]">{form.sku || "PRD-NEW"} · Criado: {new Date().toLocaleDateString("pt-BR")} · Ultima venda: 17/03/2026</p>
+                    {mode === "edit" && inlineEditing ? (
+                      <p className="mt-1 text-[12px] font-medium text-[#93c5fd]">Editando produto</p>
+                    ) : null}
                   </div>
-                  <div className="ml-auto flex gap-2">
-                    {mode === "edit" ? <button className="rounded border border-[#991b1b] bg-[#7f1d1d] px-4 py-2 text-sm text-[#fca5a5]" onClick={inactivate} type="button">{deleting ? "Inativando..." : "Inativar"}</button> : null}
-                    <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#94a3b8]" onClick={() => setModalOpen(false)} type="button">Cancelar</button>
-                    <button className="rounded border border-[#166534] bg-[#14532d] px-4 py-2 text-sm text-[#86efac]" form="product-form" type="submit">{saving ? "Salvando..." : "Salvar"}</button>
-                  </div>
+                  <button
+                    className="ml-auto inline-flex h-9 w-9 items-center justify-center rounded border border-[#2a3045] bg-[#1e2332] text-[#94a3b8] transition hover:border-[#3a4260] hover:text-[#e2e8f0]"
+                    onClick={() => setModalOpen(false)}
+                    type="button"
+                  >
+                    <span className="material-symbols-outlined !text-[18px]">close</span>
+                  </button>
                 </div>
-                <form className="flex-1 space-y-3 overflow-y-auto p-4" id="product-form" onSubmit={submit}>
+                <form className="flex-1 overflow-y-auto p-4" id="product-form" onSubmit={submit}>
+                  <fieldset className="space-y-3" disabled={!canEditFields}>
                   <section className="rounded-md border border-[#2a3045] bg-[#161a24]">
                     <header className="flex items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] px-4 py-2.5">
                       <span className="rounded bg-[#1e3a5f] px-1.5 py-0.5 font-mono text-[10px] text-[#93c5fd]">01</span>
@@ -835,6 +881,35 @@ export default function ProductsPage() {
                         Marca
                         <input className="h-10 w-full rounded border border-[#2a3045] bg-[#1e2332] px-3 text-[13px] text-[#e2e8f0]" onChange={(e) => xupdate("brand", e.target.value)} value={form.extras.brand} />
                       </label>
+                    </div>
+                  </section>
+
+                  <section className="rounded-md border border-[#2a3045] bg-[#161a24]">
+                    <header className="flex items-center gap-2 border-b border-[#2a3045] bg-[#1e2332] px-4 py-2.5">
+                      <span className="rounded bg-[#1e3a5f] px-1.5 py-0.5 font-mono text-[10px] text-[#93c5fd]">06</span>
+                      <h3 className="text-[13px] font-semibold text-[#e2e8f0]">Historico / Auditoria</h3>
+                    </header>
+                    <div className="grid grid-cols-1 gap-3 p-4 xl:grid-cols-4">
+                      <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2">
+                        <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Criado em</p>
+                        <p className="mt-1 text-[13px] text-[#e2e8f0]">
+                          {mode === "edit" && editingId ? dmy(items.find((x) => x.id === editingId)?.created_at) : new Date().toLocaleDateString("pt-BR")}
+                        </p>
+                      </div>
+                      <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2">
+                        <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Ultima alteracao</p>
+                        <p className="mt-1 text-[13px] text-[#e2e8f0]">
+                          {mode === "edit" && editingId ? dmy(items.find((x) => x.id === editingId)?.updated_at) : "--/--/----"}
+                        </p>
+                      </div>
+                      <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2">
+                        <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Alterado por</p>
+                        <p className="mt-1 text-[13px] text-[#e2e8f0]">{user.name || user.login || "Usuario atual"}</p>
+                      </div>
+                      <div className="rounded border border-[#2a3045] bg-[#1e2332] px-3 py-2">
+                        <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#64748b]">Ultima acao</p>
+                        <p className="mt-1 text-[13px] text-[#e2e8f0]">{mode === "edit" ? "Edicao de cadastro" : "Novo cadastro"}</p>
+                      </div>
                     </div>
                   </section>
 
@@ -1110,7 +1185,33 @@ export default function ProductsPage() {
                     </div>
                   </section>
                   {null}
+                  </fieldset>
                 </form>
+                <footer className="flex items-center justify-end border-t border-[#2a3045] px-5 py-3">
+                  {mode === "create" ? (
+                    <div className="flex items-center gap-2">
+                      <button className="erp-btn erp-btn-secondary" onClick={() => setModalOpen(false)} type="button">
+                        Cancelar
+                      </button>
+                      <button className="erp-btn erp-btn-success" form="product-form" type="submit">
+                        {saving ? "Salvando..." : "Salvar"}
+                      </button>
+                    </div>
+                  ) : inlineEditing ? (
+                    <div className="flex items-center gap-2">
+                      <button className="erp-btn erp-btn-secondary" onClick={resetToSnapshot} type="button">
+                        Cancelar
+                      </button>
+                      <button className="erp-btn erp-btn-success" form="product-form" type="submit">
+                        {saving ? "Salvando..." : "Salvar"}
+                      </button>
+                    </div>
+                  ) : (
+                    <button className="erp-btn erp-btn-primary" onClick={() => setInlineEditing(true)} type="button">
+                      Editar
+                    </button>
+                  )}
+                </footer>
               </div>
             </div>
           </div>

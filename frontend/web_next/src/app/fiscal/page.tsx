@@ -97,6 +97,39 @@ type FiscalStatusFilter = "all" | "autorizada" | "pendente" | "erro" | "cancelad
 type FiscalModelFilter = "all" | "nfe55" | "nfce65";
 type FiscalOriginFilter = "all" | "order" | "quote_order" | "direct";
 
+function mapDocumentToRow(doc: FiscalDocument): FiscalRow {
+  const documentType = String(doc.document_type || "").toUpperCase();
+  const model = documentType === "NFCE" ? "NFC-e 65" : documentType === "NFSE" ? "NFS-e" : "NF-e 55";
+  const status = mapFiscalStatus(doc.status || "");
+  const originType =
+    doc.origin_type === "ORDER" || doc.origin_type === "QUOTE_ORDER" || doc.origin_type === "DIRECT"
+      ? doc.origin_type
+      : "UNKNOWN";
+  const actions =
+    status === "Autorizada"
+      ? ["XML", "DANFE"]
+      : status.startsWith("Erro")
+        ? ["Ver log"]
+        : ["Consultar"];
+
+  return {
+    id: doc.id,
+    orderId: doc.order_id,
+    fiscalId: doc.id,
+    orderStatus: doc.status,
+    originType,
+    numero: String(doc.number || doc.id).padStart(6, "0"),
+    modelo: model,
+    serie: doc.series || "001",
+    emissao: new Date(doc.issued_at ?? doc.created_at).toLocaleDateString("pt-BR"),
+    destinatario: doc.recipient_name ?? "Destinatario nao informado",
+    doc: doc.recipient_document ?? "--",
+    valor: formatCurrency(doc.total_amount ?? 0),
+    status,
+    actions,
+  };
+}
+
 export default function FiscalPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -136,6 +169,8 @@ export default function FiscalPage() {
   const [originFilter, setOriginFilter] = useState<FiscalOriginFilter>("all");
   const [emissaoFilter, setEmissaoFilter] = useState("");
   const [detailRow, setDetailRow] = useState<FiscalRow | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
+  const [detailRefreshing, setDetailRefreshing] = useState(false);
 
   async function loadDocumentsOnly(token: string) {
     const fiscalResponse = await listFiscalDocumentsRequest(token, {
@@ -145,6 +180,7 @@ export default function FiscalPage() {
       sortDir: "desc",
     });
     setDocuments(fiscalResponse.items);
+    return fiscalResponse.items;
   }
 
   async function refreshFiscal(showToast = false) {
@@ -213,41 +249,7 @@ export default function FiscalPage() {
     return { emitted, taxes, errors, authorized };
   }, [summary]);
 
-  const fiscalRows = useMemo<FiscalRow[]>(() => {
-    return documents.map((doc) => {
-      const documentType = String(doc.document_type || "").toUpperCase();
-      const model =
-        documentType === "NFCE" ? "NFC-e 65" : documentType === "NFSE" ? "NFS-e" : "NF-e 55";
-      const status = mapFiscalStatus(doc.status || "");
-      const originType =
-        doc.origin_type === "ORDER" || doc.origin_type === "QUOTE_ORDER" || doc.origin_type === "DIRECT"
-          ? doc.origin_type
-          : "UNKNOWN";
-      const actions =
-        status === "Autorizada"
-          ? ["XML", "DANFE"]
-          : status.startsWith("Erro")
-            ? ["Ver log"]
-            : ["Consultar"];
-
-      return {
-        id: doc.id,
-        orderId: doc.order_id,
-        fiscalId: doc.id,
-        orderStatus: doc.status,
-        originType,
-        numero: String(doc.number || doc.id).padStart(6, "0"),
-        modelo: model,
-        serie: doc.series || "001",
-        emissao: new Date(doc.issued_at ?? doc.created_at).toLocaleDateString("pt-BR"),
-        destinatario: doc.recipient_name ?? "Destinatario nao informado",
-        doc: doc.recipient_document ?? "--",
-        valor: formatCurrency(doc.total_amount ?? 0),
-        status,
-        actions,
-      };
-    });
-  }, [documents]);
+  const fiscalRows = useMemo<FiscalRow[]>(() => documents.map(mapDocumentToRow), [documents]);
 
   const visibleRows = fiscalRows;
   const filteredRows = useMemo(() => {
@@ -421,12 +423,18 @@ export default function FiscalPage() {
       return;
     }
 
+    if (action === "Abrir") {
+      setDetailRow(row);
+      return;
+    }
+
     if (action !== "Emitir fiscal") {
       pushToast(`Ação "${action}" disponível na próxima etapa.`, "success");
       return;
     }
 
     try {
+      setActionLoadingId(row.id);
       if (!row.orderId) {
         pushToast("Documento sem origem de pedido nao pode ser emitido por esta acao.", "error");
         return;
@@ -435,7 +443,11 @@ export default function FiscalPage() {
         await invoiceOrderRequest(token, row.orderId);
       }
       await emitOrderFiscalRequest(token, row.orderId, { series: "001" });
-      await loadDocumentsOnly(token);
+      const updatedDocs = await loadDocumentsOnly(token);
+      const updatedDoc = updatedDocs.find((doc) => doc.id === row.id || (row.orderId && doc.order_id === row.orderId));
+      if (updatedDoc) {
+        setDetailRow((current) => (current && current.id === row.id ? mapDocumentToRow(updatedDoc) : current));
+      }
       pushToast(`Venda ${row.numero} emitida no fiscal com sucesso.`, "success");
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "Falha ao emitir fiscal.";
@@ -445,6 +457,32 @@ export default function FiscalPage() {
         return;
       }
       pushToast(message, "error");
+    } finally {
+      setActionLoadingId(null);
+    }
+  }
+
+  async function refreshDetailRow() {
+    if (!detailRow) return;
+    const token = getAccessToken();
+    if (!token) {
+      clearSession();
+      router.replace("/");
+      return;
+    }
+    try {
+      setDetailRefreshing(true);
+      const updatedDocs = await loadDocumentsOnly(token);
+      const updatedDoc = updatedDocs.find((doc) => doc.id === detailRow.id);
+      if (updatedDoc) {
+        setDetailRow(mapDocumentToRow(updatedDoc));
+      }
+      pushToast("Documento fiscal atualizado.", "success");
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : "Falha ao atualizar documento.";
+      pushToast(message, "error");
+    } finally {
+      setDetailRefreshing(false);
     }
   }
 
@@ -545,14 +583,16 @@ export default function FiscalPage() {
                 <span className="material-symbols-outlined !text-[16px]">tune</span>
                 Filtros
               </button>
-              <span className="erp-sort-label ml-2">ORDENAR:</span>
-              <select className="erp-list-sort-select" onChange={(e) => setSortBy(e.target.value as FiscalSortBy)} value={sortBy}>
-                <option value="recent">Mais recentes</option>
-                <option value="numero_asc">Numero A-Z</option>
-                <option value="numero_desc">Numero Z-A</option>
-                <option value="valor_asc">Valor menor</option>
-                <option value="valor_desc">Valor maior</option>
-              </select>
+              <div className="erp-sort-group">
+                <span className="erp-sort-label">Ordenar por:</span>
+                <select className="erp-list-sort-select" onChange={(e) => setSortBy(e.target.value as FiscalSortBy)} value={sortBy}>
+                  <option value="recent">Mais recentes</option>
+                  <option value="numero_asc">Numero A-Z</option>
+                  <option value="numero_desc">Numero Z-A</option>
+                  <option value="valor_asc">Valor menor</option>
+                  <option value="valor_desc">Valor maior</option>
+                </select>
+              </div>
             </div>
             {showFilters ? (
               <div className="space-y-2 px-4 py-2">
@@ -663,9 +703,20 @@ export default function FiscalPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-2">
+                          <button
+                            className="erp-list-action-btn bg-[#161a24] px-2.5 py-1 text-[#64748b] hover:text-[#e2e8f0]"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleRowAction(order, "Abrir");
+                            }}
+                            type="button"
+                          >
+                            Abrir
+                          </button>
                           {order.actions.map((action) => (
                             <button
-                              className="erp-list-action-btn bg-[#161a24] px-2.5 py-1 text-[#64748b] hover:text-[#e2e8f0]"
+                              className="erp-list-action-btn bg-[#161a24] px-2.5 py-1 text-[#64748b] hover:text-[#e2e8f0] disabled:opacity-40"
+                              disabled={actionLoadingId === order.id}
                               key={`${order.id}-${action}`}
                               onClick={(event) => {
                                 event.stopPropagation();
@@ -720,6 +771,27 @@ export default function FiscalPage() {
                   <p className="mt-1 font-mono text-[11px] text-[#64748b]">{detailRow.destinatario} · {detailRow.emissao}</p>
                 </div>
                 <div className="ml-auto flex gap-2">
+                  <button
+                    className="erp-btn erp-btn-secondary"
+                    disabled={detailRefreshing}
+                    onClick={() => void refreshDetailRow()}
+                    type="button"
+                  >
+                    {detailRefreshing ? "Atualizando..." : "Atualizar"}
+                  </button>
+                  <button
+                    className="erp-btn erp-btn-success disabled:opacity-40"
+                    disabled={
+                      actionLoadingId === detailRow.id ||
+                      !detailRow.orderId ||
+                      detailRow.status === "Autorizada" ||
+                      detailRow.status === "Cancelada"
+                    }
+                    onClick={() => void handleRowAction(detailRow, "Emitir fiscal")}
+                    type="button"
+                  >
+                    Emitir fiscal
+                  </button>
                   <button className="erp-btn erp-btn-secondary" onClick={() => setDetailRow(null)} type="button">
                     Fechar
                   </button>
@@ -801,17 +873,17 @@ export default function FiscalPage() {
                 <p className="mt-1 font-mono text-xs text-[#64748b]">N° {String(Date.now()).slice(-6)} · Série {emitForm.serie || "001"}</p>
               </div>
               <div className="ml-auto flex items-center gap-2">
-                <button className="rounded border border-[#2a3045] bg-[#1e2332] px-4 py-2 text-sm text-[#93c5fd] transition hover:border-[#3a4260]" type="button">
+                <button className="erp-btn erp-btn-secondary" type="button">
                   Salvar rascunho
                 </button>
                 <button
-                  className="rounded border border-[#7f1d1d] bg-[#7f1d1d] px-4 py-2 text-sm text-[#fca5a5] transition hover:brightness-110"
+                  className="erp-btn erp-btn-danger"
                   onClick={closeEmitModal}
                   type="button"
                 >
                   Cancelar
                 </button>
-                <button className="rounded border border-[#166534] bg-[#14532d] px-4 py-2 text-sm font-semibold text-[#86efac] transition hover:brightness-110" type="submit">
+                <button className="erp-btn erp-btn-success" type="submit">
                   ▶ Transmitir NF-e
                 </button>
               </div>
